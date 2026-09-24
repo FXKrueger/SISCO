@@ -15,6 +15,7 @@ then runs). Real enforcement is server-side: GitHub ruleset + CODEOWNERS, see RE
 """
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -25,7 +26,9 @@ PROTECTED_FILES = ("config/limits.yaml", "CLAUDE.md")
 MAIN = ("main", "master")
 MERGE_VALUE_FLAGS = {"-t", "--subject", "-b", "--body", "-F", "--body-file", "--match-head-commit", "-A", "--author-email"}
 API_WRITE_OK = re.compile(r"^/?repos/[^/]+/[^/]+/(issues(/.*)?|pulls|pulls/\d+/(comments|reviews|requested_reviewers))$")
-GUARD_FILES = re.compile(r"\.claude/|CODEOWNERS|\.github/rulesets")
+# This repo's .claude/ (relative, or under the repo path), not ~/.claude/ (plugins, agent memory).
+REPO = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()).rstrip("/")
+GUARD_FILES = re.compile(r"(?<![\w~/.-])\.claude/|" + re.escape(REPO + "/.claude/") + r"|CODEOWNERS|\.github/rulesets")
 READ_ONLY = re.compile(r"^(cat|less|head|tail|grep|rg|ls|wc|diff|git (diff|log|show|status|add|blame))\b")
 
 

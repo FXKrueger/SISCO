@@ -1,38 +1,38 @@
 # B-001 report: trend baseline
 
-**Verdict: baseline recorded.** It is not promoted or killed. At 2x costs it loses money (Sharpe -0.21). That value is now the bar for gate 3 ("beats trend baseline"). Every strategy must beat it anyway, and must also beat BTC buy-and-hold (Sharpe 0.75).
+**Verdict: baseline recorded.** It is not promoted or killed. At 2x costs it breaks even (Sharpe -0.05). That value is the bar for gate 3 ("beats trend baseline"). Every strategy must also beat BTC buy-and-hold (Sharpe 0.75).
 
-Trial: T00012. The invalid T00002 is listed in `registry/invalidations.yaml`. Top 10 Binance perps, sessions 07:00 and 19:00 UTC, development data 2020-01 to 2025-08.
+Current trial: T00022, with cost tiers corrected after review 1 (`docs/reviews/2026-09-24-gemini.md`). T00012 used the old tiers, which were about 2x too high for mid-sized coins, and stays in the record. The invalid T00002 is listed in `registry/invalidations.yaml`. Top 10 Binance perps, sessions 07:00 and 19:00 UTC, development data 2020-01 to 2025-08.
 
-## Key numbers
+## Key numbers (T00022)
 
 | | 1x costs | 2x costs |
 |---|---|---|
-| Net R | +40.3 | -22.7 |
-| Sharpe | 0.38 | -0.21 |
+| Net R | +47.3 | -5.3 |
+| Sharpe | 0.45 | -0.05 |
 
-- Trades: 1405, win rate 43.9%.
-- Gross plus funding: about +0.07 R/trade. Costs are 0.045 R/trade at 1x.
-- Max drawdown at 2x costs: 67 R.
-- DSR: 0.31.
-- Null test: beats 95.5% of random-entry runs, just above the 95th percentile.
-- Reaction delay: +6 h -44.7 R, +12 h -50.3 R at 2x costs. The small edge fades with slower entries.
+- Trades: 1403, win rate 44%.
+- Max drawdown at 2x costs: 64.5 R.
+- Null test (random coin and side through the engine, same stop, target and time limit): the strategy beats 100% of 1000 runs; their 95th percentile is -61 R.
+- Reaction delay at 2x costs: +6 h -23.1 R, +12 h -28.6 R.
+- DSR 0.40 and PBO 0.00 are not meaningful here. The two "trials" are the same rule under two cost models, not variants.
+- For comparison, T00012 (old tiers): +40.3 R at 1x and -22.7 R at 2x, Sharpe 0.38 and -0.21.
 
 ## Regime split (2x costs)
 
 | Regime | Net R |
 |---|---|
-| 2020-21 bull | +9.4 |
-| 2022 crash | -3.0 |
-| 2023-24 recovery | -23.8 |
-| 2025 (to Aug) | -5.3 |
+| 2020-21 bull | +16.9 |
+| 2022 crash | -2.8 |
+| 2023-24 recovery | -15.6 |
+| 2025 (to Aug) | -3.8 |
 
 ## Red flags
 
-- The trend effect is real but small here: positive gross, beats the null test. It only survives low costs, and only in the 2020-21 bull market.
-- 13,983 signals were skipped because of one position per coin and the 5R limit. The baseline re-enters coins that still trend, so a lot of signals repeat.
-- The known-effect canary (BTC only, gross) has Sharpe 1.30. Most of the cost damage comes from alts in the top 10.
+- **The trend effect is real:** it beats random entries decisively. But it only pays in the 2020-21 bull market and roughly breaks even at 2x costs.
+- **7-day churn:** the 7-day holding limit (SPEC 3) closes and re-enters coins that still trend, paying costs each time (review 1, finding 10).
+- **Cost model:** still based on hours of X-Perps order books, not weeks.
 
 ## Proposed next step
 
-None for the baseline itself. Its numbers change only when the cost model changes (v2, after 2 weeks of X-Perps books). Then re-run it as a new trial, which needs a budget raise in its spec.
+None for the baseline itself. Re-measure it when cost model v2 exists, after 2 weeks of X-Perps books.

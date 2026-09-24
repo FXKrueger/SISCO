@@ -32,6 +32,7 @@ BLOCK = [
     "sed -i '' 's/x/y/' .claude/hooks/guard.py",
     "rm .github/CODEOWNERS",
     "cat /dev/null > .claude/settings.json",
+    "rm " + str(Path(__file__).parents[1] / ".claude/settings.json"),
     "echo $(gh pr merge 1)",
     'echo "`gh pr merge 1`"',
     "true; gh pr merge 1",
@@ -50,6 +51,8 @@ ALLOW = [
     "python -m ingestion",
     "docker run --rm img python -c \"import x; print('a && b | c')\"",
     "grep -n foo .claude/hooks/guard.py | head -5",
+    "node ~/.claude/plugins/codex/scripts/companion.mjs task",
+    "echo note >> /Users/someone/.claude/projects/x/memory/MEMORY.md",
 ]
 
 
