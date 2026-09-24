@@ -10,7 +10,8 @@ earliest fill by that many hours (reaction-delay test).
 
 Conservative intrabar rules (bars have no tick order):
 - stop and target touched in the same bar: the stop wins,
-- a limit filled inside a bar can be stopped in that bar but not reach target in it,
+- a limit filled inside a bar can be stopped in that bar (any extreme beyond the limit comes
+  after the first touch), and reaches its target in that bar only if the bar closes beyond it,
 - a stop gapped through fills at the bar open, plus stop slippage.
 """
 
@@ -94,7 +95,11 @@ def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
             gapped = side * (o[k] - sig.stop) <= 0 and not (k == j and intrabar_fill)
             reason, exit_px = "stop", o[k] if gapped else sig.stop
             break
-        if hit_tgt and not (k == j and intrabar_fill):
+        if k == j and intrabar_fill:
+            # The high (long) may predate the fill. The close does not: a close beyond the target
+            # means price crossed the target after the fill.
+            hit_tgt = side * (c[k] - sig.target) >= 0
+        if hit_tgt:
             reason, exit_px = "target", sig.target
             break
         if et[k] + np.timedelta64(1, "h") >= deadline:
@@ -116,7 +121,7 @@ def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
         fund = -side * f.funding_rate[m].sum()  # positive rate: longs pay shorts
     return {
         "coin": sig.coin, "side": sig.side, "signal_time": t, "entry_kind": sig.entry.kind,
-        "entry_time": entry_time, "entry": entry, "stop": sig.stop, "target": sig.target,
+        "entry_time": entry_time, "planned_entry": ref, "entry": entry, "stop": sig.stop, "target": sig.target,
         "exit_time": exit_time, "exit": exit_px, "reason": reason,
         "gross_R": side * (exit_px - entry) / risk,
         "cost_R": -cost_mult * cost / stop_pct,
