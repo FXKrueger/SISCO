@@ -35,10 +35,11 @@ themselves (`.github/`, `.claude/`, `CLAUDE.md`) need the lead's review. Two lay
 
 1. Server side (the real one): `.github/CODEOWNERS` plus the ruleset in
    `.github/rulesets/main.json` (PR required, code owner review for the paths above, no force
-   push, no deletion, no bypass). Private repos need GitHub Pro for this. Apply once:
-   `gh api -X POST repos/FXKrueger/SISCO/rulesets --input .github/rulesets/main.json`.
-   Agents must push with their own GitHub account (write access, not admin). If they use the
-   lead's account, they can approve and change rulesets as the lead.
+   push, no deletion). Repo admins may merge a PR past code owner review, but never push
+   directly. That bypass exists because agents still push with the lead's account, and GitHub
+   does not let an author approve their own PR. Next step: give agents their own GitHub account
+   (write access, not admin), then remove the bypass. Until then, only layer 2 stops an agent
+   from merging protected changes.
 2. Local, for Claude Code agents in this repo: `.claude/hooks/guard.py` blocks merging PRs
    that touch protected paths, pushing to main, GitHub API writes to merges, refs, contents,
    rulesets and settings, and edits to the guard itself. It catches drift, not deliberate evasion.
