@@ -58,3 +58,15 @@ class Archive:
         for _, f in self.files.values():
             f.close()
         self.files.clear()
+
+
+def read_rows(path):
+    """Yield rows from an archive file. Stops quietly at a truncated last frame, which is normal
+    for the file currently being written (or one cut by a crash). Rows before it are complete."""
+    try:
+        with zstd.open(path, "rt") as f:
+            for line in f:
+                if line.endswith("\n"):
+                    yield json.loads(line)
+    except EOFError:
+        return

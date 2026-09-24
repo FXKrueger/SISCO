@@ -1,0 +1,17 @@
+name: tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+      # Leak and random canaries run inside the tests on synthetic data. The known-effect canary
+      # needs the Binance store and runs weekly on the server (python -m harness.canaries).
+      - run: python -m pytest -q tests

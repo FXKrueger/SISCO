@@ -1,0 +1,32 @@
+id: H-001
+title: Reversals at Fibonacci retracement levels vs random levels
+hypothesis: >
+  After a swing, price reverses more often at Fibonacci retracement levels (38.2%, 50%, 61.8%)
+  than at random retracement levels in the same range.
+economic_reason: >
+  None known (DECISIONS D3). The only candidate mechanism is self-fulfilling order placement by
+  traders who watch these levels. This test decides whether fib levels enter the feature set.
+universe:
+  venue: binance_um        # research history, D15. Costs from the X-Perps cost model.
+  top_n: 20                # by 30-day quote volume, point-in-time
+  step_hours: 4
+rules: |
+  Every 4 hours, per coin in the universe:
+  1. Swing: highest high H and lowest low L over the last lookback_h hours. Skip if (H-L)/L < 5x ATR.
+     ATR = mean hourly high-low over the last 24 hours.
+  2. Up swing (L before H): levels = H - r*(H-L). Long limit at the nearest level below the
+     last close, only if it is within 2 ATR of the close. Down swing: mirror, short.
+  3. r = 0.382, 0.5, 0.618 for levels=fib. For levels=random, 3 ratios drawn uniformly from
+     [0.3, 0.7], seeded by (coin, swing timestamps), so the control is reproducible.
+  4. Stop 1 ATR beyond the level, target 2.5 ATR from the level (2.5R), time limit 72 hours,
+     limit order expiry 4 hours.
+params:
+  levels: [fib, random]
+  lookback_h: [120, 240]
+trial_budget: 8
+kill_criteria: |
+  The hypothesis is rejected if any of these hold for the fib variant with the same lookback:
+  - net R at 2x costs is not above the random-levels variant,
+  - win rate is not above the random variant by a one-sided two-proportion z-test at p < 0.05,
+  - it fails the stage 3 gates (SPEC 6.4).
+  Rejected means fib levels do not enter the feature set (D3).

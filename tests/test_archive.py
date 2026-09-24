@@ -3,7 +3,7 @@ import tempfile
 from compression import zstd
 from pathlib import Path
 
-from ingestion.archive import Archive
+from ingestion.archive import Archive, read_rows
 
 
 def rows(root):
@@ -28,6 +28,11 @@ def test_roundtrip_append_and_crash_safety():
         assert len(got) == 3 and got[2]["data"] == {"body": "é"}
         assert all(r["source"] == "okx" and isinstance(r["ingested_at"], int) for r in got)
         assert len(list(Path(root).rglob("*.jsonl.zst"))) == 1
+
+        # A half-written last frame (file in use, or a crash) is skipped, earlier rows survive.
+        p = next(Path(root).rglob("*.jsonl.zst"))
+        p.write_bytes(p.read_bytes() + zstd.compress(b'{"ingested_at": 1, "source": "okx", "data": "x"}\n')[:-6])
+        assert len(list(read_rows(p))) == 3
 
 
 if __name__ == "__main__":
