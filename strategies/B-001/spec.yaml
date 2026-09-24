@@ -1,0 +1,26 @@
+id: B-001
+title: Trend baseline (multi-lookback time-series momentum)
+hypothesis: >
+  Baseline, not a hypothesis to promote. Every strategy must beat it risk-adjusted at 2x costs
+  (SPEC 6.4 gate 3). Time-series momentum is the best-documented price effect in crypto
+  (Liu and Tsyvinski 2021, D3).
+economic_reason: >
+  Slow diffusion of information and trend-following flows. Published, so it is the bar to beat,
+  not an edge of our own.
+universe:
+  venue: binance_um
+  top_n: 10
+rules: |
+  At every session (harness.config SESSIONS_UTC, D19), per coin in the universe:
+  1. Signs of the 7-, 30- and 90-day returns (last close vs the close that many days earlier).
+  2. All three positive: long. All three negative: short. Otherwise nothing.
+  3. Market entry. Stop 2 daily ATR from the last close, target 6 daily ATR (3R), time limit
+     7 days (exit at the first session after it). Daily ATR = mean hourly high-low over the last
+     14 days times sqrt(24). Risk per trade is fixed at 1R, so position size scales inversely
+     with volatility.
+  4. One position per coin (harness). A coin that still trends is re-entered at the next session.
+params:
+  variant: [fixed]
+trial_budget: 1
+kill_criteria: |
+  None. A baseline is not promoted or killed. Its 2x-cost Sharpe is the bar for gate 3.

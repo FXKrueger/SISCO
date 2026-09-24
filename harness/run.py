@@ -24,6 +24,7 @@ from .config import CRASHES, DELAYS_H, DEV_END, REGIMES, SESSIONS_UTC, TRIAL_BUD
 from .pit import Panel
 
 GATES = {"dsr": 0.95, "pbo": 0.2}
+TREND_BASELINE = "B-001"
 # Strategy code reads data only through PITView and never calls an LLM (CLAUDE.md rules 5 and 6).
 # ponytail: a token lint, not a sandbox. The verifier's code review is the second line.
 FORBIDDEN = [r"\bopen\(", r"\bimport os\b", r"\bfrom os\b", r"duckdb", r"read_parquet", r"read_csv", r"urllib", r"requests",
@@ -87,6 +88,7 @@ def evaluate(trades_1x, trades_2x, panel, hypothesis, start):
         "pbo": stats.pbo(matrix.to_numpy()),
         "trials_in_hypothesis": int(matrix.shape[1]),
         "btc_buy_hold_sharpe": bh,
+        "trend_baseline_sharpe": baseline_sharpe(hypothesis),
         "null": stats.null_test(trades_2x, panel),
         "regimes": stats.by_window(trades_2x, REGIMES),
         "crashes": stats.by_window(trades_2x, CRASHES),
@@ -94,10 +96,18 @@ def evaluate(trades_1x, trades_2x, panel, hypothesis, start):
     }, {"net_1x": d1, "net_2x": d2}
 
 
+def baseline_sharpe(hypothesis):
+    """2x-cost Sharpe of the latest registered trend-baseline result, None before it has run."""
+    if hypothesis == TREND_BASELINE:
+        return None
+    runs = [e for e in registry.entries() if e["hypothesis"] == TREND_BASELINE and e["kind"] == "result"]
+    return runs[-1]["results"]["sharpe_2x"] if runs else None
+
+
 def gates(r):
     g = {
         "beats_btc_buy_hold": r["btc_buy_hold_sharpe"] is not None and r["sharpe_2x"] > r["btc_buy_hold_sharpe"],
-        "beats_trend_baseline": None,  # baseline is registered in M2
+        "beats_trend_baseline": None if r.get("trend_baseline_sharpe") is None else r["sharpe_2x"] > r["trend_baseline_sharpe"],
         f"dsr>={GATES['dsr']}": r["dsr"] >= GATES["dsr"],
         f"pbo<={GATES['pbo']}": None if r["pbo"] is None else r["pbo"] <= GATES["pbo"],
         "beats_null_p95": None if r["null"] is None else r["null"]["passed"],
@@ -143,7 +153,7 @@ def report(folder, spec, trial_id, params, r, g, verdict):
 - PBO: {fmt(r['pbo'])}
 - Max drawdown: {r['max_dd_R_2x']:.1f} R
 - Trades: {r['trades']}, win rate {fmt(r['win_rate'])}
-- BTC buy-and-hold Sharpe, same period: {fmt(r['btc_buy_hold_sharpe'])}
+- BTC buy-and-hold Sharpe, same period: {fmt(r['btc_buy_hold_sharpe'])}; trend baseline (B-001) Sharpe at 2x: {fmt(r.get('trend_baseline_sharpe'))}
 - Reaction delay, net R at 2x costs: {', '.join(f"+{h} h: {v:.1f}" for h, v in r.get('delay_net_R_2x', {}).items()) or 'n/a'}
 - Decisions at sessions {SESSIONS_UTC} UTC only; time exits and order expiries wait for the next session (D19)
 - Null test (1000 random entries): strategy beats {fmt(null.get('beats_share'))} of runs, 95th pct {fmt(null.get('p95'), 1)} R
