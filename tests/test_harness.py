@@ -101,7 +101,7 @@ def test_evaluate_gates_report_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "ROOT", tmp_path)
     monkeypatch.setattr(registry, "LOG", tmp_path / "trials.jsonl")
     p = canaries.synthetic_panel(days=200)
-    sigs = engine.generate(canaries.RandomEntries(), p, step_hours=6)
+    sigs = engine.generate(canaries.RandomEntries(), p, p.timeline(6))
     t1, t2 = engine.backtest(sigs, p, 1.0), engine.backtest(sigs, p, 2.0)
     assert t2.net_R.sum() < t1.net_R.sum()
     r, series = run.evaluate(t1, t2, p, "H-X", p.timeline()[0])
@@ -110,3 +110,15 @@ def test_evaluate_gates_report_pipeline(tmp_path, monkeypatch):
     tid = registry.append({"hypothesis": "H-X", "kind": "result"}, series)
     out = run.report(tmp_path, {"id": "H-X", "title": "random"}, tid, {}, r, g, verdict)
     assert "FAIL" in out.read_text() and registry.series("H-X").shape[1] == 1
+
+
+def test_session_mode_time_exit_waits_for_next_session_and_delay_shifts_fill():
+    rows = [(100 + i, 100.5 + i, 99.5 + i, 100 + i) for i in range(12)]  # T0 = 00:00 UTC
+    p = panel(rows)
+    s = sig(stop=90, target=130, hours=2)
+    tr = engine.simulate(T0 + pd.Timedelta(hours=3), s, p, sessions=(7, 19))
+    assert tr["reason"] == "time" and tr["exit_time"] == T0 + pd.Timedelta(hours=7)  # limit 05:00 -> session 07:00
+    assert engine.simulate(T0 + pd.Timedelta(hours=3), s, p)["exit_time"] == T0 + pd.Timedelta(hours=5)
+    late = engine.simulate(T0 + pd.Timedelta(hours=3), s, p, delay_h=2)
+    assert late["entry_time"] == T0 + pd.Timedelta(hours=5) and late["entry"] == 105
+    assert list(p.sessions((7, 19)).hour.unique()) == [7]  # 12 bars from 00:00: only the 07:00 session exists

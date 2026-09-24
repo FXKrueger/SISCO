@@ -83,7 +83,7 @@ class Trend:
 
 def leak_canary():
     try:
-        engine.generate(Peek(), synthetic_panel(coins=1, days=40))
+        engine.generate(Peek(), p := synthetic_panel(coins=1, days=40), p.timeline())
     except LookaheadError:
         pass
     else:
@@ -97,7 +97,7 @@ def leak_canary():
 
 def random_canary():
     panel = synthetic_panel()
-    tr = engine.backtest(engine.generate(RandomEntries(), panel, step_hours=6), panel)
+    tr = engine.backtest(engine.generate(RandomEntries(), panel, panel.timeline(6)), panel)
     se = tr.gross_R.std(ddof=1) / len(tr) ** 0.5
     assert len(tr) > 200, f"random canary: too few trades ({len(tr)})"
     assert abs(tr.gross_R.mean()) < 3 * se, f"random canary: gross mean {tr.gross_R.mean():.3f} R is not ~0 (se {se:.3f})"
@@ -107,7 +107,7 @@ def random_canary():
 
 def known_effect_canary():
     panel = Panel.load(coins={"BTC"}, top_n=1)
-    tr = engine.backtest(engine.generate(Trend(), panel, step_hours=24), panel)
+    tr = engine.backtest(engine.generate(Trend(), panel, panel.timeline(24)), panel)
     d = stats.daily(tr.assign(net_R=tr.gross_R), panel.timeline()[0], panel.timeline()[-1])
     sr = stats.sharpe(d)
     assert sr > 0, f"known-effect canary: BTC trend gross Sharpe {sr:.2f} <= 0, published results say positive"

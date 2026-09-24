@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -46,7 +47,7 @@ def list_prefix(prefix):
     """Yield (kind, value) for S3 CommonPrefixes ('dir') and Keys ('key'), following pagination."""
     marker = ""
     while True:
-        xml = get(f"{BUCKET}?delimiter=/&prefix={prefix}&marker={marker}").decode()
+        xml = get(f"{BUCKET}?delimiter=/&prefix={urllib.parse.quote(prefix)}&marker={urllib.parse.quote(marker)}").decode()
         yield from (("dir", p) for p in re.findall(r"<Prefix>([^<]+/)</Prefix>", xml) if p != prefix)
         yield from (("key", k) for k in re.findall(r"<Key>([^<]+\.zip)</Key>", xml))
         if "<IsTruncated>true</IsTruncated>" not in xml:
@@ -78,7 +79,7 @@ def fetch(symbol, kind):
     keys = [v for k, v in list_prefix(prefix) if k == "key" and month_of(v) <= LAST_MONTH]
     if not keys:
         return None
-    df = pd.concat([read_zip(get(FILES + k), KLINE_COLS if kind == "klines_1h" else FUNDING_COLS) for k in sorted(keys)])
+    df = pd.concat([read_zip(get(FILES + urllib.parse.quote(k)), KLINE_COLS if kind == "klines_1h" else FUNDING_COLS) for k in sorted(keys)])
     now = pd.Timestamp.now(tz="UTC")
     if kind == "klines_1h":
         df = df.drop(columns=["ignore"], errors="ignore")
@@ -99,6 +100,14 @@ def fetch(symbol, kind):
 
 
 def download(symbol):
+    try:
+        _download(symbol)
+    except Exception as e:  # one broken symbol must not stop the rest; rerun retries it
+        print(f"FAILED {symbol}: {e!r}", flush=True)
+    return symbol
+
+
+def _download(symbol):
     for kind in ("klines_1h", "funding"):
         out = STORE / kind / f"{symbol}.parquet"
         if out.exists():
@@ -108,7 +117,6 @@ def download(symbol):
             out.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(out.with_suffix(".tmp"), index=False)
             out.with_suffix(".tmp").rename(out)
-    return symbol
 
 
 if __name__ == "__main__":

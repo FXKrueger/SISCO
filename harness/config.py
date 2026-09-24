@@ -28,3 +28,9 @@ CRASHES = {
 }
 
 TRIAL_BUDGET_DEFAULT = 50
+
+# Session mode (D19): the system runs only when the lead runs it. Strategies decide at these
+# UTC hours; exits and order expiries between sessions wait for the next one. Live must match.
+SESSIONS_UTC = (7, 19)
+# Reaction-delay test: every trial is also run with fills this many hours late.
+DELAYS_H = (6, 12)

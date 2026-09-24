@@ -71,6 +71,11 @@ class Panel:
                 fu[coin] = f[f.available_time < end]
         return cls(kl, fu, top_n=top_n, volumes=vols)
 
+    def sessions(self, hours):
+        """Decision times in session mode (D19): every day at the given UTC hours."""
+        t = self.timeline()
+        return t[t.hour.isin(hours)]
+
     def timeline(self, step_hours=1):
         """Decision times: every bar close (hourly), from the first bar to the end of development data."""
         start = min(d.available_time.iloc[0] for d in self.bars.values())
