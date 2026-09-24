@@ -1,6 +1,6 @@
 """Harness self-tests (SPEC 6.3). Run on every harness change and weekly.
 
-  python -m harness.canaries          all three (known-effect needs the Binance store)
+  python -m harness.canaries          all four (known-effect needs the Binance store)
 
 Canary runs are self-tests, not trials: they do not touch the registry.
 """
@@ -16,7 +16,7 @@ from .run import Refused, lint
 from .strategy import EntryRule, Signal
 
 
-def synthetic_panel(coins=5, days=400, drift=0.0, vol=0.01, seed=1):
+def synthetic_panel(coins=5, days=400, drift=0.0, vol=0.01, seed=1, substeps=60):
     """Hourly bars aggregated from a minute-level random walk, so high and low are true path extremes
     and there is nothing to predict."""
     rng = np.random.default_rng(seed)
@@ -24,8 +24,8 @@ def synthetic_panel(coins=5, days=400, drift=0.0, vol=0.01, seed=1):
     et = pd.date_range(t0, periods=days * 24, freq="h")
     bars, fund = {}, {}
     for i in range(coins):
-        path = 100 * np.exp(np.cumsum(rng.normal(drift / 60, vol / 60**0.5, len(et) * 60)))
-        m = np.concatenate([[100], path]).reshape(-1)[:-1].reshape(len(et), 60)  # minute prices, hour by hour
+        path = 100 * np.exp(np.cumsum(rng.normal(drift / substeps, vol / substeps**0.5, len(et) * substeps)))
+        m = np.concatenate([[100], path])[:-1].reshape(len(et), substeps)  # sub-hour prices, hour by hour
         close = np.concatenate([m[1:, 0], [path[-1]]])
         open_ = m[:, 0]
         high = np.maximum(m.max(1), close)
@@ -63,6 +63,24 @@ class RandomEntries:
         px, side = last.close.iloc[-1], self.rng.choice(["long", "short"])
         s = 1 if side == "long" else -1
         return [Signal(coin, side, EntryRule("market"), px * (1 - s * 0.03), px * (1 + s * 0.06), timedelta(hours=48))]
+
+
+class RandomLimits:
+    """Random-side limit entries half an ATR from the close, stop 1 ATR, target 2.5 ATR."""
+
+    def __init__(self, params=None):
+        self.rng = np.random.default_rng((params or {}).get("seed", 0))
+
+    def on_bar(self, t, view):
+        coin = self.rng.choice(view.universe() or ["C0"])
+        b = view.bars(coin, n=24)
+        if len(b) < 24:
+            return []
+        px, atr = b.close.iloc[-1], (b.high - b.low).mean()
+        s = self.rng.choice([1, -1])
+        lv = px - s * 0.5 * atr
+        return [Signal(coin, "long" if s == 1 else "short", EntryRule("limit", lv, timedelta(hours=4)), lv - s * atr, lv + s * 2.5 * atr,
+                       timedelta(hours=72))]
 
 
 class Trend:
@@ -105,6 +123,19 @@ def random_canary():
     return f"pass: {len(tr)} trades, gross {tr.gross_R.mean():+.3f} R/trade (se {se:.3f}), costs {tr.cost_R.mean():+.3f} R/trade"
 
 
+def limit_canary(seeds=8):
+    """Limit fills, intrabar rules and session exits on a fine random walk: gross ~0 R.
+    Needs fine sub-hour steps; with coarse steps the path overshoots the limit at the fill."""
+    trs = []
+    for seed in range(seeds):
+        p = synthetic_panel(days=300, seed=seed + 100, substeps=600)
+        trs.append(engine.backtest(engine.generate(RandomLimits({"seed": seed}), p, p.sessions((7, 19))), p, sessions=(7, 19)))
+    g = pd.concat(trs).gross_R
+    se = g.std(ddof=1) / len(g) ** 0.5
+    assert abs(g.mean()) < 3 * se, f"limit canary: gross mean {g.mean():.3f} R is not ~0 (se {se:.3f})"
+    return f"pass: {len(g)} trades, gross {g.mean():+.3f} R/trade (se {se:.3f})"
+
+
 def known_effect_canary():
     panel = Panel.load(coins={"BTC"}, top_n=1)
     tr = engine.backtest(engine.generate(Trend(), panel, panel.timeline(24)), panel)
@@ -115,5 +146,5 @@ def known_effect_canary():
 
 
 if __name__ == "__main__":
-    for c in (leak_canary, random_canary, known_effect_canary):
+    for c in (leak_canary, random_canary, limit_canary, known_effect_canary):
         print(c.__name__, c())

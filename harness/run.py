@@ -100,7 +100,8 @@ def baseline_sharpe(hypothesis):
     """2x-cost Sharpe of the latest registered trend-baseline result, None before it has run."""
     if hypothesis == TREND_BASELINE:
         return None
-    runs = [e for e in registry.entries() if e["hypothesis"] == TREND_BASELINE and e["kind"] == "result"]
+    bad = registry.invalidated()
+    runs = [e for e in registry.entries() if e["hypothesis"] == TREND_BASELINE and e["kind"] == "result" and e["trial_id"] not in bad]
     return runs[-1]["results"]["sharpe_2x"] if runs else None
 
 
@@ -202,7 +203,8 @@ def main(folder, params):
     if missing:
         raise Refused(f"missing params {sorted(missing)}")
     budget = spec.get("trial_budget", TRIAL_BUDGET_DEFAULT)
-    used = sum(e["hypothesis"] == hyp and e["kind"] == "start" for e in registry.entries())
+    bad = registry.invalidated()
+    used = sum(e["hypothesis"] == hyp and e["kind"] == "start" and e["trial_id"] not in bad for e in registry.entries())
     if used >= budget:
         raise Refused(f"trial budget used up ({used}/{budget}). The hypothesis is closed.")
     src = (folder / "strategy.py").read_text()

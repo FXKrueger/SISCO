@@ -9,10 +9,12 @@ copy and backups are the real record once they exist (issues #1, #2).
 import hashlib
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 ROOT = Path(os.environ.get("SISCO_DATA", "data")) / "registry"
 LOG = ROOT / "trials.jsonl"
@@ -54,11 +56,23 @@ def append(record, series=None):
     return trial_id
 
 
+def invalidated():
+    """Trial ids invalidated by the lead: registry/invalidations.yaml as merged on origin/main
+    (a protected path). Invalidated trials stay in the log and are reported, but are left out of
+    statistics and do not use trial budget. Returns start and result ids."""
+    r = subprocess.run(["git", "show", "origin/main:registry/invalidations.yaml"], capture_output=True, text=True)
+    ids = {t for item in (yaml.safe_load(r.stdout) or []) for t in item["trials"]} if r.returncode == 0 else set()
+    for e in entries():
+        if e["trial_id"] in ids or e.get("start") in ids:
+            ids |= {e["trial_id"], e.get("start")}
+    return ids - {None}
+
+
 def series(hypothesis, name="net_2x"):
-    """days x trials matrix of one series for all trials of a hypothesis."""
-    cols = {}
+    """days x trials matrix of one series for all valid trials of a hypothesis."""
+    cols, bad = {}, invalidated()
     for e in entries():
         p = ROOT / "series" / f"{e['trial_id']}.parquet"
-        if e["hypothesis"] == hypothesis and p.exists():
+        if e["hypothesis"] == hypothesis and p.exists() and e["trial_id"] not in bad:
             cols[e["trial_id"]] = pd.read_parquet(p)[name]
     return pd.DataFrame(cols).fillna(0.0)
