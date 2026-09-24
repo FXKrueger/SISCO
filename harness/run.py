@@ -48,11 +48,13 @@ def strategy_files(folder):
 
 
 def check_registered(folder):
-    subprocess.run(["git", "fetch", "-q", "origin", "main"], check=True)
+    subprocess.run(["git", "-C", str(Path(__file__).resolve().parents[1]), "fetch", "-q", "origin", "main"], check=True)
+    repo = Path(__file__).resolve().parents[1]
     for f in strategy_files(folder):
-        merged = subprocess.run(["git", "show", f"origin/main:{f.as_posix()}"], capture_output=True)
+        rel = f.resolve().relative_to(repo).as_posix()  # git paths are relative to the repo root
+        merged = subprocess.run(["git", "-C", str(repo), "show", f"origin/main:{rel}"], capture_output=True)
         if merged.returncode or merged.stdout != f.read_bytes():
-            raise Refused(f"{f.as_posix()} is not merged on origin/main as-is. Register it by PR first.")
+            raise Refused(f"{rel} is not merged on origin/main as-is. Register it by PR first.")
 
 
 def lint(src):

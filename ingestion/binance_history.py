@@ -2,6 +2,8 @@
 
   python -m ingestion.binance_history [SYMBOL ...]     klines, funding, premium index: all symbols
   python -m ingestion.binance_history --metrics        OI and long/short metrics: coins ever in the top 30
+  python -m ingestion.binance_history --holdout        THE LEAD ONLY: holdout months into data/holdout
+                                                       (CLAUDE.md rule 2: agents never fetch or read it)
 
 Writes data/store/binance_um/<kind>/<SYMBOL>.parquet. All USDT perps, including
 delisted ones (survivorship). Only months before harness.config.DEV_END are downloaded:
@@ -86,9 +88,9 @@ def month_of(key):
     return m.group(1) if m else None
 
 
-def fetch(symbol, kind):
+def fetch(symbol, kind, first_month="0000", last_month=LAST_MONTH, end=DEV_END):
     path, cols = KINDS[kind]
-    keys = [v for k, v in list_prefix("data/futures/um/" + path.format(s=symbol)) if k == "key" and (month_of(v) or "9999") <= LAST_MONTH]
+    keys = [v for k, v in list_prefix("data/futures/um/" + path.format(s=symbol)) if k == "key" and first_month <= (month_of(v) or "9999") <= last_month]
     if not keys:
         return None
     df = pd.concat([read_zip(get(FILES + urllib.parse.quote(k)), cols) for k in sorted(keys)])
@@ -112,26 +114,26 @@ def fetch(symbol, kind):
         df = df.drop(columns=["funding_interval_hours"])
         df["event_time"] = pd.to_datetime(df.calc_time, unit="ms", utc=True)
         df["available_time"] = df.event_time  # known at settlement
-    df = df[df.available_time < pd.Timestamp(DEV_END)].drop_duplicates("event_time").sort_values("event_time")
+    df = df[df.available_time < pd.Timestamp(end)].drop_duplicates("event_time").sort_values("event_time")
     df["coin"] = symbol.removesuffix("USDT")
     df["ingested_at"], df["source"], df["revision"] = now, "binance_vision", 0
     return df
 
 
-def download(symbol, kinds=("klines_1h", "funding", "premium_1h")):
+def download(symbol, kinds=("klines_1h", "funding", "premium_1h"), store=STORE, **window):
     try:
-        _download(symbol, kinds)
+        _download(symbol, kinds, store, **window)
     except Exception as e:  # one broken symbol must not stop the rest; rerun retries it
         print(f"FAILED {symbol}: {e!r}", flush=True)
     return symbol
 
 
-def _download(symbol, kinds):
+def _download(symbol, kinds, store=STORE, **window):
     for kind in kinds:
-        out = STORE / kind / f"{symbol}.parquet"
+        out = store / kind / f"{symbol}.parquet"
         if out.exists():
             continue
-        df = fetch(symbol, kind)
+        df = fetch(symbol, kind, **window)
         if df is not None and len(df):
             out.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(out.with_suffix(".tmp"), index=False)
@@ -151,6 +153,15 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args == ["--metrics"]:
         syms, job = top_symbols(), lambda s: download(s, ("metrics",))
+    elif args == ["--holdout"]:
+        from harness.config import HOLDOUT_END, HOLDOUT_START
+
+        # Whole months inside the sealed window. Monthly files for the last partial month are not
+        # published yet, so the holdout ends at the last full month.
+        first = f"{HOLDOUT_START.year}-{HOLDOUT_START.month:02d}"
+        last = f"{HOLDOUT_END.year}-{HOLDOUT_END.month - 1:02d}" if HOLDOUT_END.month > 1 else f"{HOLDOUT_END.year - 1}-12"
+        store = STORE.parents[1] / "holdout" / "binance_um"
+        syms, job = symbols(), lambda s: download(s, ("klines_1h", "funding"), store, first_month=first, last_month=last, end=HOLDOUT_END)
     else:
         syms, job = args or symbols(), download
     print(f"{len(syms)} symbols, months up to {LAST_MONTH}", flush=True)

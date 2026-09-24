@@ -168,3 +168,37 @@ def test_null_test_is_bounded_and_fair_on_a_random_walk():
     per_trade = null["p95"] / len(tr)
     assert -1 < per_trade < 0.5  # bounded payoffs: no +/-20 R null trades
     assert 0.02 < null["beats_share"] < 0.98  # random entries do not beat random entries
+
+
+def test_backtest_applies_the_beta_direction_limit():
+    base = canaries.synthetic_panel(coins=1, days=60)
+    btc = base.bars["C0"].assign(coin="BTC")
+    clones = {c: btc.assign(coin=c) for c in ("BTC", "A", "B", "C", "D")}  # beta 1 to BTC
+    p = Panel(clones, {}, top_n=5)
+    t = pd.Timestamp("2021-02-15 07:00", tz="UTC")
+    px = btc.close[btc.available_time <= t].iloc[-1]
+    sigs = [(t, Signal(c, "long", EntryRule("market"), px * 0.9, px * 1.3, timedelta(hours=72))) for c in clones]
+    tr = engine.backtest(sigs, p)
+    assert len(tr) == 3 and tr.attrs["skipped_signals"] == 2  # 3R of beta-1 longs, then refused
+    shorts = sigs[:3] + [(t, Signal("D", "short", EntryRule("market"), px * 1.1, px * 0.7, timedelta(hours=72)))]
+    assert len(engine.backtest(shorts, p)) == 4  # a short reduces the exposure: allowed
+
+
+def test_gatekeeper_preconditions(tmp_path, monkeypatch):
+    from harness import gatekeeper, run
+
+    monkeypatch.setattr(registry, "ROOT", tmp_path)
+    monkeypatch.setattr(registry, "LOG", tmp_path / "trials.jsonl")
+    monkeypatch.setattr(registry, "invalidated", lambda: set())
+    params = {"a": 1}
+    with pytest.raises(run.Refused, match="passed stage 3"):
+        gatekeeper.preconditions("H-X", params)
+    tid = registry.append({"kind": "result", "hypothesis": "H-X", "params": params, "verdict": "pass"})
+    monkeypatch.setattr(gatekeeper, "approvals", lambda: set())
+    with pytest.raises(run.Refused, match="not approved"):
+        gatekeeper.preconditions("H-X", params)
+    monkeypatch.setattr(gatekeeper, "approvals", lambda: {tid})
+    assert gatekeeper.preconditions("H-X", params)["trial_id"] == tid
+    registry.append({"kind": "holdout", "hypothesis": "H-X", "params": params})
+    with pytest.raises(run.Refused, match="never a second"):
+        gatekeeper.preconditions("H-X", params)
