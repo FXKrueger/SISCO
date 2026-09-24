@@ -67,7 +67,7 @@ def panel(now, top_n, days=120):
         if len(k):
             coin = sym.removesuffix("USDT")
             bars[coin], fund[coin] = k, funding(sym, now)
-    return Panel(bars, fund, top_n=top_n)
+    return Panel(bars, fund, top_n=top_n)  # events: the cached LLM events, cut at `now` by the PITView
 
 
 def base_coin(coin):

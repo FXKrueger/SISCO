@@ -229,6 +229,14 @@ def run(args):
         elif account.pnl_today_R <= -limits["daily_loss_stop_R"]:
             report.append("Daily loss limit reached: no new trades today.")
         else:
+            if not args.no_llm:
+                try:
+                    from llm import funnel
+
+                    new = funnel.run(max_calls=funnel.config().get("calls_per_session", 10))
+                    report.append(f"- LLM events extracted: {len(new)} (usable from the next session: available_time is now)")
+                except (Exception, SystemExit) as e:  # the funnel must never block trading decisions
+                    report.append(f"- LLM extraction skipped: {e}")
             canaries.leak_canary()
             top_n = max(30, max(_spec(s["id"])["universe"].get("top_n", 30) for s in approved))
             panel = live_data.panel(t_sess, top_n=top_n)
@@ -370,6 +378,7 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--approve-all", action="store_true", help="paper mode only: approve every card")
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--no-llm", action="store_true", help="skip the LLM event extraction this session")
     ap.add_argument("--cashflow", nargs="+", type=str, metavar=("USD", "NOTE"))
     a = ap.parse_args()
     if a.cashflow:
