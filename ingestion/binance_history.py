@@ -81,12 +81,14 @@ def read_zip(blob, cols):
 
 
 def month_of(key):
-    return re.search(r"(\d{4}-\d{2})(-\d{2})?\.zip$", key).group(1)
+    """YYYY-MM of a monthly or daily file, None for malformed names (Binance has a few)."""
+    m = re.search(r"(\d{4}-\d{2})(-\d{2})?\.zip$", key)
+    return m.group(1) if m else None
 
 
 def fetch(symbol, kind):
     path, cols = KINDS[kind]
-    keys = [v for k, v in list_prefix("data/futures/um/" + path.format(s=symbol)) if k == "key" and month_of(v) <= LAST_MONTH]
+    keys = [v for k, v in list_prefix("data/futures/um/" + path.format(s=symbol)) if k == "key" and (month_of(v) or "9999") <= LAST_MONTH]
     if not keys:
         return None
     df = pd.concat([read_zip(get(FILES + urllib.parse.quote(k)), cols) for k in sorted(keys)])
