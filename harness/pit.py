@@ -10,6 +10,15 @@ import pandas as pd
 from .config import DEV_END
 
 STORE = Path(os.environ.get("SISCO_DATA", "data")) / "store" / "binance_um"
+EVENTS = Path(os.environ.get("SISCO_DATA", "data")) / "llm" / "events.parquet"
+
+
+def load_events(path=EVENTS):
+    """Valid LLM events (SPEC 8.2) from the cached extraction pipeline. Empty if none yet."""
+    if not Path(path).exists():
+        return pd.DataFrame(columns=["available_time", "event_type", "coins", "direction", "surprise", "credibility"])
+    e = pd.read_parquet(path)
+    return e[e.valid].sort_values("available_time").reset_index(drop=True)
 BAR = timedelta(hours=1)
 
 
@@ -33,7 +42,7 @@ def liquidity(volumes, top_n, min_days):
 class Panel:
     """All bars and funding rows for a set of coins, plus a point-in-time liquidity universe."""
 
-    def __init__(self, bars, funding, top_n=30, min_days=30, volumes=None):
+    def __init__(self, bars, funding, top_n=30, min_days=30, volumes=None, events=None):
         """volumes: {coin: frame with available_time, quote_volume} for the universe ranking.
         Defaults to bars. Pass all coins here even when bars holds only the ones that matter."""
         self.bars = {c: d.sort_values("available_time").reset_index(drop=True) for c, d in bars.items()}
@@ -41,6 +50,8 @@ class Panel:
         self._avail = {c: d.available_time.to_numpy("datetime64[ns]") for c, d in self.bars.items()}
         self._favail = {c: d.available_time.to_numpy("datetime64[ns]") for c, d in self.funding.items()}
         self._universe, self._adv = liquidity(volumes or self.bars, top_n, min_days)
+        self.events = events if events is not None else load_events()
+        self._eavail = self.events.available_time.to_numpy("datetime64[ns]") if len(self.events) else np.array([], "datetime64[ns]")
 
     def adv(self, coin, t):
         try:
@@ -121,6 +132,12 @@ class PITView:
             return pd.DataFrame(columns=["event_time", "available_time", "funding_rate"])
         lo, hi = self._cut(self.__panel._favail[coin], n, end)
         return self.__panel.funding[coin].iloc[lo:hi].copy()
+
+    def events(self, n=None, end=None):
+        """LLM events known at t (available_time = when the extraction finished), oldest first.
+        Columns: event_type, coins (JSON list), direction, surprise, credibility, time_sensitivity_h."""
+        lo, hi = self._cut(self.__panel._eavail, n, end)
+        return self.__panel.events.iloc[lo:hi].copy()
 
     def universe(self):
         """Coins tradeable at t by the liquidity rule, computed from data known at t."""

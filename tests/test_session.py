@@ -62,7 +62,7 @@ def env(tmp_path, monkeypatch):
     return SimpleNamespace(journal=j, limits=limits, market=market, path=tmp_path)
 
 
-ARGS = SimpleNamespace(dry_run=False, approve_all=True, resume=False, cashflow=None)
+ARGS = SimpleNamespace(dry_run=False, approve_all=True, resume=False, cashflow=None, no_llm=True)
 
 
 def test_paper_session_places_once_then_stops_out(env):
@@ -157,7 +157,7 @@ def test_tax_export_uses_last_ecb_rate_and_live_trades_only(tmp_path, monkeypatc
 
 
 def test_dry_run_does_not_use_up_the_session(env):
-    session.run(SimpleNamespace(dry_run=True, approve_all=False, resume=False, cashflow=None))
+    session.run(SimpleNamespace(dry_run=True, approve_all=False, resume=False, cashflow=None, no_llm=True))
     assert env.journal.trades() == [] and env.journal.get("last_signal_time") is None
     session.run(ARGS)
     assert len(env.journal.trades()) == 1
