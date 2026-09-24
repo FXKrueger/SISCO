@@ -446,7 +446,7 @@ until a backtest looks good.
 
 ## 15. Open items to verify
 
-- OKX X-Perps: fee tiers. Demo trading exists for EEA (checked 2026-09-24). The private API
+- OKX X-Perps: fees confirmed (0.02% maker, 0.05% taker, standard tier). Demo trading exists for EEA (checked 2026-09-24). The private API
   calls (orders, positions history, balance fields) are tested only against a simulated exchange:
   verify on demo before live (SETUP.md stage 5).
 - Training cutoff of the pinned Opus model. It defines the clean test window for phase B.

@@ -97,7 +97,7 @@ Only when all of these are true:
 - a strategy passed stage 3, the verifier review, the holdout and at least 3 months and 100 trades
   of paper trading within its backtest range (SPEC 6.4);
 - stage 5 worked end to end;
-- X-Perps fee tiers are confirmed (SPEC 15).
+- the account is still on the standard fee tier (0.02% maker, 0.05% taker), or the cost model is updated.
 
 Then:
 1. Create a **live** API key: Read and Trade only, never Withdraw, IP-bound. Replace the demo
