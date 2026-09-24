@@ -52,6 +52,13 @@ def check_segment(t):
         return "writes to the guard itself (.claude/, CODEOWNERS, rulesets) are for the lead only"
     if "api.github.com" in seg:
         return "use gh, not raw calls to api.github.com"
+    # Lead-only commands (CLAUDE.md rules 2 and 7): holdout, resuming after a halt, cash flows.
+    if re.search(r"harness[./]gatekeeper", seg):
+        return "the gatekeeper (holdout run) is for the lead only"
+    if "binance_history" in seg and "--holdout" in seg:
+        return "agents never fetch holdout data (CLAUDE.md rule 2)"
+    if re.search(r"ops[./]session", seg) and re.search(r"--(resume|cashflow)\b", seg):
+        return "resuming after a halt and recording cash flows are for the lead only"
     # Skip env assignments like GH_TOKEN=x gh ...
     while t and re.match(r"^\w+=", t[0]):
         t = t[1:]

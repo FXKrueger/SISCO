@@ -4,7 +4,7 @@ All costs are fractions of notional. The engine converts them to R (divide by st
 Funding is applied from real funding data, not here.
 
 v1 limits, to be fixed in v2:
-- Fees are OKX regular-tier perp fees. X-Perps fee tiers are an open item (SPEC 15).
+- Fees: X-Perps standard tier, 0.02% maker and 0.05% taker (confirmed by the lead, 2026-09-24).
 - Spread and impact tiers from ~3 hours of X-Perps books (research/xperps_costs.py, 168 one-minute
   samples, 2026-09-24), mapped to the coin's Binance volume in the last 90 days of dev data:
   >= 5B (BTC, ETH) 0.3-0.9 bp; 1-5B (SOL, XRP, DOGE) 3-12 bp; 0.2-1B (SUI, ADA, BNB, LINK, AVAX,
