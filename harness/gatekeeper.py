@@ -23,7 +23,7 @@ import yaml
 from . import engine, registry
 from .config import HOLDOUT_START, SESSIONS_UTC
 from .pit import STORE, Panel
-from .run import Refused, check_registered, evaluate, gates, lint, load_strategy, parse_value, report, sha, strategy_files
+from .run import GATES, Refused, check_registered, evaluate, final, gates, lint, load_strategy, parse_value, report, sha, strategy_files
 
 HOLDOUT_STORE = STORE.parents[1] / "holdout" / "binance_um"
 
@@ -44,6 +44,11 @@ def preconditions(hyp, params):
               and e.get("verdict") == "pass" and e["trial_id"] not in bad]
     if not passed:
         raise Refused(f"no development trial of {hyp} with params {params} passed stage 3")
+    dsr, pbo = final(hyp)  # deflated by every trial of the hypothesis, not only those before it
+    passed = [e for e in passed if dsr.get(e["trial_id"], 0) >= GATES["dsr"] and (pbo is None or pbo <= GATES["pbo"])]
+    if not passed:
+        raise Refused(f"no trial of {hyp} with params {params} passes DSR >= {GATES['dsr']} and PBO <= {GATES['pbo']} "
+                      "when deflated by all trials of the hypothesis")
     ok = approvals()
     approved = [e for e in passed if e["trial_id"] in ok]
     if not approved:
