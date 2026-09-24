@@ -61,6 +61,8 @@ def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
     ref = sig.entry.price if sig.entry.kind == "limit" else (c[i0 - 1] if i0 else o[i0])
     if not (side * (ref - sig.stop) > 0 and side * (sig.target - ref) > 0):
         raise SignalError(f"{sig} at {t}: stop and target must be on opposite sides of entry {ref}")
+    if delay_h and sig.entry.kind == "market" and side * (o[i] - sig.stop) <= 0:
+        return None  # reacting late: nobody enters a trade whose stop is already through
 
     # Entry
     intrabar_fill = False
@@ -112,22 +114,38 @@ def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
     entry_time = pd.Timestamp(et[j], tz="UTC")
     exit_time = pd.Timestamp(et[k], tz="UTC") + pd.Timedelta(hours=1)
     stop_pct = risk / ref
-    adv = panel.adv(sig.coin, t)
-    cost = costs.entry_cost(sig.entry.kind, adv) + costs.exit_cost(reason, adv, (h[k] - l[k]) / o[k])
-    f = panel.funding.get(sig.coin)
+    cost = costs.entry_cost(sig.entry.kind, panel.adv(sig.coin, t)) + costs.exit_cost(
+        reason, panel.adv(sig.coin, exit_time), (h[k] - l[k]) / o[k])
+    fcache = panel.__dict__.setdefault("_farrays", {})
+    if sig.coin not in fcache:
+        f = panel.funding.get(sig.coin)
+        fcache[sig.coin] = (f.event_time.to_numpy("datetime64[ns]"), f.funding_rate.to_numpy(float)) if f is not None and len(f) else None
     fund = 0.0
-    if f is not None and len(f):
-        m = (f.event_time > entry_time) & (f.event_time <= exit_time)
-        fund = -side * f.funding_rate[m].sum()  # positive rate: longs pay shorts
+    if fcache[sig.coin] is not None:
+        fe, fr = fcache[sig.coin]
+        # Stops and targets fill inside the bar, before a settlement at its end. Time exits fill at
+        # the close, which coincides with a settlement: count it (conservative).
+        a = np.searchsorted(fe, np.datetime64(entry_time.tz_convert(None), "ns"), side="right")
+        b = np.searchsorted(fe, np.datetime64(exit_time.tz_convert(None), "ns"), side="right" if reason in ("time", "end") else "left")
+        fund = -side * fr[a:b].sum()  # positive rate: longs pay shorts
     return {
         "coin": sig.coin, "side": sig.side, "signal_time": t, "entry_kind": sig.entry.kind,
         "entry_time": entry_time, "planned_entry": ref, "entry": entry, "stop": sig.stop, "target": sig.target,
-        "exit_time": exit_time, "exit": exit_px, "reason": reason,
+        "exit_time": exit_time, "exit": exit_px, "reason": reason, "time_limit_h": sig.time_limit / pd.Timedelta(hours=1),
         "gross_R": side * (exit_px - entry) / risk,
         "cost_R": -cost_mult * cost / stop_pct,
         "funding_R": fund / stop_pct,
         **{f"f_{k}": v for k, v in sig.features.items()},
     }
+
+
+def last_close(panel, coin, t):
+    """Close of the last bar known at t, or None."""
+    d = panel.bars.get(coin)
+    if d is None:
+        return None
+    i = np.searchsorted(panel._avail[coin], np.datetime64(pd.Timestamp(t).tz_convert(None), "ns"), side="right")
+    return float(d.close.iat[i - 1]) if i else None
 
 
 def backtest(signals, panel, cost_mult=1.0, max_open=5, sessions=None, delay_h=0):

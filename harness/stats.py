@@ -67,29 +67,38 @@ def pbo(matrix, blocks=16):
     return float(np.mean(np.array(lam) <= 0))
 
 
-def null_test(trades, panel, runs=1000, seed=0):
-    """Random entries with the same timing, holding time and risk (stop distance) as the real trades,
-    but random coin (from the universe at that time) and random side. Returns the 95th percentile
-    of total net R and the share of runs the strategy beat. Costs are carried over per trade."""
+def null_test(trades, panel, runs=1000, seed=0, cost_mult=2.0, sessions=None):
+    """Random entries run through the engine: for each real trade the same signal time, the same
+    stop and target distances (in % of price), the same time limit, but a random coin from the
+    universe at that time and a random side, entered at market. Payoffs are bounded by stop and
+    target like the real trades, and costs come from the engine for that coin. Returns the 95th
+    percentile of total net R over `runs` random portfolios and the share the strategy beat."""
+    from .engine import last_close, simulate
+    from .strategy import EntryRule, Signal
+
     if not len(trades):
         return None
     rng = np.random.default_rng(seed)
-    closes = {c: d.set_index("event_time").close for c, d in panel.bars.items()}
-    rows = []
+    options = []
     for tr in trades.itertuples():
         uni = panel._universe.get(tr.signal_time.floor("D")) or [tr.coin]
-        stop_pct = abs(tr.entry - tr.stop) / tr.entry
-        cands = []
+        sp = abs(tr.planned_entry - tr.stop) / tr.planned_entry
+        tp = abs(tr.target - tr.planned_entry) / tr.planned_entry
+        tl = pd.Timedelta(hours=tr.time_limit_h)
+        net = []
         for c in uni:
-            s = closes[c]
-            a, b = s.asof(tr.entry_time), s.asof(tr.exit_time - pd.Timedelta(hours=1))
-            if pd.notna(a) and pd.notna(b):
-                cands.append(np.log(b / a) / stop_pct)
-        rows.append((np.array(cands or [0.0]), tr.cost_R))
+            px = last_close(panel, c, tr.signal_time)
+            if px is None:
+                continue
+            for s in (1, -1):
+                sig = Signal(c, "long" if s == 1 else "short", EntryRule("market"), px * (1 - s * sp), px * (1 + s * tp), tl)
+                r = simulate(tr.signal_time, sig, panel, cost_mult, sessions)
+                if r is not None:
+                    net.append(r["gross_R"] + r["cost_R"] + r["funding_R"])
+        options.append(np.array(net or [0.0]))
     totals = np.zeros(runs)
-    for moves, cost in rows:
-        pick = moves[rng.integers(len(moves), size=runs)]
-        totals += rng.choice([-1, 1], size=runs) * pick + cost
+    for net in options:
+        totals += net[rng.integers(len(net), size=runs)]
     real = trades.net_R.sum()
     return {"p95": float(np.percentile(totals, 95)), "beats_share": float((real > totals).mean()), "passed": bool(real > np.percentile(totals, 95))}
 

@@ -24,7 +24,8 @@ def liquidity(volumes, top_n, min_days):
     daily = pd.DataFrame(
         {c: d.set_index(d.available_time.dt.floor("D")).quote_volume.groupby(level=0).sum() for c, d in volumes.items()}
     ).sort_index().asfreq("D")
-    vol30 = daily.rolling(30, min_periods=min_days).sum().shift(1)
+    # A missing day (exchange outage) must not drop a coin for a month: need 2/3 of the window.
+    vol30 = (daily.rolling(30, min_periods=min(min_days, 20)).mean() * 30).shift(1)
     vol30 = vol30.where(daily.notna().cumsum().shift(1) >= min_days)
     return {day: list(row.dropna().nlargest(top_n).index) for day, row in vol30.iterrows()}, vol30 / 30
 
@@ -92,13 +93,16 @@ class PITView:
         self.t = t
 
     def _cut(self, avail, n, end):
-        if end is not None and np.datetime64(pd.Timestamp(end).tz_convert(None), "ns") > self.__t:
-            raise LookaheadError(f"asked for data up to {end}, view is at {self.t}")
-        hi = np.searchsorted(avail, self.__t, side="right")
+        cut = self.__t
+        if end is not None:
+            cut = np.datetime64(pd.Timestamp(end).tz_convert(None), "ns")
+            if cut > self.__t:
+                raise LookaheadError(f"asked for data up to {end}, view is at {self.t}")
+        hi = np.searchsorted(avail, cut, side="right")
         return max(0, hi - n) if n else 0, hi
 
     def bars(self, coin, n=None, end=None):
-        """Hourly bars for coin, oldest first. n: only the last n bars."""
+        """Hourly bars for coin, oldest first. n: only the last n bars. end: known by then (<= t)."""
         if coin not in self.__panel.bars:
             return self.__panel.bars[next(iter(self.__panel.bars))].iloc[0:0].copy()
         lo, hi = self._cut(self.__panel._avail[coin], n, end)

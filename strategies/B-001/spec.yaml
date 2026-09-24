@@ -21,6 +21,6 @@ rules: |
   4. One position per coin (harness). A coin that still trends is re-entered at the next session.
 params:
   variant: [fixed]
-trial_budget: 1
+trial_budget: 2  # raised from 1 (2026-09-24): re-run after the cost tiers were corrected (review 1).
 kill_criteria: |
   None. A baseline is not promoted or killed. Its 2x-cost Sharpe is the bar for gate 3.
