@@ -2,7 +2,7 @@
 
 Timing (SPEC 6.2 #1): a signal made at t (a bar close) fills at the earliest in the bar that
 starts at t. Market orders fill at that bar's open. Limit orders fill when price trades through
-the limit before expiry. Everything is measured in R: 1R = the distance from entry to stop.
+the limit before expiry. Everything is measured in R: 1R = the distance from the planned entry to the stop.
 
 Session mode (D19): with sessions set, time-limit exits and limit-order expiries happen at the
 first session at or after the limit, because nothing runs between sessions. delay_h shifts the
@@ -79,9 +79,9 @@ def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
             j += 1
         if entry is None:
             return None
-    risk = abs(entry - sig.stop)
-    if side * (entry - sig.stop) <= 0:  # gapped through the stop on entry
-        risk = abs(ref - sig.stop)
+    # 1R is fixed when the order is sent: planned entry (limit price, or last close for market
+    # orders) to stop. A better or worse fill changes the result in R, not the size of R.
+    risk = abs(ref - sig.stop)
 
     # Exit
     deadline = next_session(pd.Timestamp(et[j], tz="UTC") + sig.time_limit, sessions)
@@ -106,7 +106,7 @@ def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
 
     entry_time = pd.Timestamp(et[j], tz="UTC")
     exit_time = pd.Timestamp(et[k], tz="UTC") + pd.Timedelta(hours=1)
-    stop_pct = risk / entry
+    stop_pct = risk / ref
     adv = panel.adv(sig.coin, t)
     cost = costs.entry_cost(sig.entry.kind, adv) + costs.exit_cost(reason, adv, (h[k] - l[k]) / o[k])
     f = panel.funding.get(sig.coin)

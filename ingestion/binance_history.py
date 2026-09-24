@@ -1,8 +1,9 @@
 """Binance USD-M futures history from data.binance.vision into the PIT store.
 
-  python -m ingestion.binance_history [SYMBOL ...]
+  python -m ingestion.binance_history [SYMBOL ...]     klines, funding, premium index: all symbols
+  python -m ingestion.binance_history --metrics        OI and long/short metrics: coins ever in the top 30
 
-Writes data/store/binance_um/{klines_1h,funding}/<SYMBOL>.parquet. All USDT perps, including
+Writes data/store/binance_um/<kind>/<SYMBOL>.parquet. All USDT perps, including
 delisted ones (survivorship). Only months before harness.config.DEV_END are downloaded:
 the holdout is never fetched.
 """
@@ -30,6 +31,13 @@ LAST_MONTH = f"{DEV_END.year}-{DEV_END.month - 1:02d}" if DEV_END.month > 1 else
 
 KLINE_COLS = ["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "trades", "taker_buy_volume", "taker_buy_quote_volume", "ignore"]
 FUNDING_COLS = ["calc_time", "funding_interval_hours", "funding_rate"]
+# kind -> (path under data/futures/um/, csv columns or None when the file has a header)
+KINDS = {
+    "klines_1h": ("monthly/klines/{s}/1h/", KLINE_COLS),
+    "funding": ("monthly/fundingRate/{s}/", FUNDING_COLS),
+    "premium_1h": ("monthly/premiumIndexKlines/{s}/1h/", KLINE_COLS),
+    "metrics": ("daily/metrics/{s}/", None),
+}
 
 
 def get(url, tries=4):
@@ -62,26 +70,35 @@ def symbols():
 
 
 def read_zip(blob, cols):
-    """Monthly CSVs have a header row since about 2022 and none before."""
+    """Monthly CSVs have a header row since about 2022 and none before. cols None: use the header."""
     with zipfile.ZipFile(io.BytesIO(blob)) as z:
         rows = list(csv.reader(io.TextIOWrapper(z.open(z.namelist()[0]))))
+    if cols is None:
+        return pd.DataFrame(rows[1:], columns=rows[0])
     if rows and not rows[0][0].lstrip("-").isdigit():
         rows = rows[1:]
     return pd.DataFrame(rows, columns=cols[: len(rows[0])] if rows else cols)
 
 
 def month_of(key):
-    return key.rsplit("-", 2)[-2] + "-" + key.rsplit("-", 1)[-1][:2]
+    return re.search(r"(\d{4}-\d{2})(-\d{2})?\.zip$", key).group(1)
 
 
 def fetch(symbol, kind):
-    prefix = f"data/futures/um/monthly/{'klines' if kind == 'klines_1h' else 'fundingRate'}/{symbol}/" + ("1h/" if kind == "klines_1h" else "")
-    keys = [v for k, v in list_prefix(prefix) if k == "key" and month_of(v) <= LAST_MONTH]
+    path, cols = KINDS[kind]
+    keys = [v for k, v in list_prefix("data/futures/um/" + path.format(s=symbol)) if k == "key" and month_of(v) <= LAST_MONTH]
     if not keys:
         return None
-    df = pd.concat([read_zip(get(FILES + urllib.parse.quote(k)), KLINE_COLS if kind == "klines_1h" else FUNDING_COLS) for k in sorted(keys)])
+    df = pd.concat([read_zip(get(FILES + urllib.parse.quote(k)), cols) for k in sorted(keys)])
     now = pd.Timestamp.now(tz="UTC")
-    if kind == "klines_1h":
+    if kind == "metrics":
+        df["event_time"] = pd.to_datetime(df.create_time, utc=True)
+        df = df[df.event_time.dt.minute == 0].drop(columns=["create_time", "symbol"])  # hourly is enough
+        for c in df.columns.drop("event_time"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        # When a snapshot becomes known is not documented. Assume 5 minutes late (CLAUDE.md rule 9).
+        df["available_time"] = df.event_time + pd.Timedelta(minutes=5)
+    elif kind in ("klines_1h", "premium_1h"):
         df = df.drop(columns=["ignore"], errors="ignore")
         for c in df.columns:
             df[c] = pd.to_numeric(df[c])
@@ -99,16 +116,16 @@ def fetch(symbol, kind):
     return df
 
 
-def download(symbol):
+def download(symbol, kinds=("klines_1h", "funding", "premium_1h")):
     try:
-        _download(symbol)
+        _download(symbol, kinds)
     except Exception as e:  # one broken symbol must not stop the rest; rerun retries it
         print(f"FAILED {symbol}: {e!r}", flush=True)
     return symbol
 
 
-def _download(symbol):
-    for kind in ("klines_1h", "funding"):
+def _download(symbol, kinds):
+    for kind in kinds:
         out = STORE / kind / f"{symbol}.parquet"
         if out.exists():
             continue
@@ -119,10 +136,23 @@ def _download(symbol):
             out.with_suffix(".tmp").rename(out)
 
 
+def top_symbols(n=30):
+    """Symbols that are ever in the top n by liquidity, from the klines already in the store."""
+    from harness.pit import liquidity
+
+    vols = {p.stem: pd.read_parquet(p, columns=["available_time", "quote_volume"]) for p in (STORE / "klines_1h").glob("*.parquet")}
+    universe, _ = liquidity(vols, n, 30)
+    return sorted(set().union(*universe.values()))
+
+
 if __name__ == "__main__":
-    syms = sys.argv[1:] or symbols()
+    args = sys.argv[1:]
+    if args == ["--metrics"]:
+        syms, job = top_symbols(), lambda s: download(s, ("metrics",))
+    else:
+        syms, job = args or symbols(), download
     print(f"{len(syms)} symbols, months up to {LAST_MONTH}", flush=True)
     with ThreadPoolExecutor(16) as pool:
-        for i, s in enumerate(pool.map(download, syms), 1):
+        for i, s in enumerate(pool.map(job, syms), 1):
             if i % 25 == 0:
                 print(i, s, flush=True)

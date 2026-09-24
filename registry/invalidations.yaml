@@ -1,0 +1,10 @@
+# Trials invalidated by the lead. They stay in the registry and in the reports. Invalidated
+# trials are left out of statistics (DSR, PBO, baseline) and do not use trial budget.
+# Only this file as merged on origin/main counts (harness.registry.invalidated).
+
+- trials: [T00002, T00004, T00006, T00008, T00010]
+  reason: >
+    Harness bug, fixed in the same PR: 1R was measured from the actual fill instead of the
+    planned entry. Limit orders filled at a gapped open just above the stop got a tiny R, so
+    cost in R exploded (up to -336 R per trade on synthetic data).
+  date: 2026-09-24

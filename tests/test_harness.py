@@ -40,7 +40,7 @@ def test_pit_view_cuts_at_t_and_refuses_lookahead():
 def test_market_fills_at_next_open_and_target():
     p = panel(FLAT + [(101, 111, 100.5, 110)])
     tr = engine.simulate(T0 + pd.Timedelta(hours=3), sig(), p)
-    assert tr["entry"] == 101 and tr["reason"] == "target" and tr["gross_R"] == pytest.approx(9 / 6)
+    assert tr["entry"] == 101 and tr["reason"] == "target" and tr["gross_R"] == pytest.approx(9 / 5)  # 1R = last close 100 - stop 95
 
 
 def test_stop_wins_when_both_hit_in_one_bar():
@@ -122,3 +122,26 @@ def test_session_mode_time_exit_waits_for_next_session_and_delay_shifts_fill():
     late = engine.simulate(T0 + pd.Timedelta(hours=3), s, p, delay_h=2)
     assert late["entry_time"] == T0 + pd.Timedelta(hours=5) and late["entry"] == 105
     assert list(p.sessions((7, 19)).hour.unique()) == [7]  # 12 bars from 00:00: only the 07:00 session exists
+
+
+def test_one_r_is_fixed_at_order_time_when_a_limit_fills_at_a_better_open():
+    # Limit long at 98, stop 95 (1R = 3). The next bar opens at 95.5, near the stop, and trades down to it.
+    p = panel(FLAT + [(95.5, 96, 94.5, 95)])
+    tr = engine.simulate(T0 + pd.Timedelta(hours=3), sig(stop=95, target=105.5, kind="limit", price=98), p)
+    assert tr["entry"] == 95.5 and tr["reason"] == "stop"
+    assert tr["gross_R"] == pytest.approx((95 - 95.5) / 3)
+    assert tr["cost_R"] > -1  # costs stay a fraction of 1R, not hundreds of R
+
+
+def test_invalidation_only_from_merged_file(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    monkeypatch.setattr(registry, "ROOT", tmp_path)
+    monkeypatch.setattr(registry, "LOG", tmp_path / "trials.jsonl")
+    s = registry.append({"hypothesis": "H-X", "kind": "start"})
+    r = registry.append({"hypothesis": "H-X", "kind": "result", "start": s}, {"net_2x": pd.Series([1.0, 2.0])})
+    merged = {"text": "- trials: [%s]\n  reason: bug\n" % r}
+    monkeypatch.setattr(registry.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, merged["text"], ""))
+    assert registry.invalidated() == {s, r} and registry.series("H-X").empty
+    merged["text"] = ""  # a local edit that is not on origin/main does not count
+    assert registry.invalidated() == set() and registry.series("H-X").shape[1] == 1
