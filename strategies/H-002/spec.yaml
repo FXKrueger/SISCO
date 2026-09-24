@@ -1,0 +1,35 @@
+id: H-002
+title: Time-series momentum on the most liquid coins only
+hypothesis: >
+  Time-series momentum survives X-Perps costs when it trades only the few most liquid coins
+  (costs 1-8 bp instead of 15-40 bp) with stops wide enough that costs are a small share of R.
+  Must beat the trend baseline B-001 (top 10) and BTC buy-and-hold at 2x costs.
+economic_reason: >
+  Trend-following flows and slow diffusion of information (Liu and Tsyvinski 2021, D3). The
+  effect is published; the question here is only whether it pays after X-Perps costs.
+prior_knowledge: >
+  Disclosed before registration. Already seen on development data: the known-effect canary (BTC,
+  30-day sign, daily decisions, 7-day hold) has gross Sharpe 1.30; B-001 (top 10, 7/30/90-day
+  agreement) has net Sharpe 0.45 at 1x and -0.05 at 2x costs; the phase A exploration found
+  3-day momentum to be the only effect beyond noise. No H-002 variant has been run.
+universe:
+  venue: binance_um
+  top_n: 5
+rules: |
+  At every session (harness.config SESSIONS_UTC, D19):
+  1. Coins: the `coins` most liquid of the universe (30-day quote volume, point-in-time).
+  2. Signal per coin: sign of the return over `lookback_d` days (last close vs the close
+     lookback_d days earlier). Positive: long. Negative: short.
+  3. Market entry. Stop 3 daily ATR from the last close. Target 20 daily ATR (far: the trade
+     normally ends at the time limit or the stop). Time limit 7 days (exit at the first session
+     after it). Daily ATR = mean hourly high-low over the last 14 days times sqrt(24).
+  4. One position per coin (harness). A coin that still trends is re-entered at the next session.
+params:
+  coins: [3, 5]
+  lookback_d: [30, 90]
+trial_budget: 8
+kill_criteria: |
+  Rejected if the best variant fails any stage 3 gate at 2x costs (SPEC 6.4): beats BTC
+  buy-and-hold and the trend baseline B-001 risk-adjusted, DSR >= 0.95, PBO <= 0.2, beats the
+  null test, holds in every regime split. Also rejected if the variants disagree in sign of net R
+  at 2x costs (no plateau).
