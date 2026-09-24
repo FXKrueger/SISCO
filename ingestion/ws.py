@@ -7,10 +7,11 @@ import websockets
 
 log = logging.getLogger("ingestion")
 UA = "SISCO-archiver/0.1"
+REDDIT_UA = "python:sisco-archiver:v0.1 (research archive)"  # Reddit 429s other formats
 
 
 def http_get(url, timeout=20):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    req = urllib.request.Request(url, headers={"User-Agent": REDDIT_UA if "reddit.com" in url else UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, r.headers, r.read()
 

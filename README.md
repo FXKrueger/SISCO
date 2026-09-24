@@ -8,7 +8,7 @@ market data (price, derivatives positioning, liquidity, on-chain) with LLM-extra
 - [Decision log](docs/DECISIONS.md)
 - [Agent guide](CLAUDE.md)
 
-Status: M0 in progress. Day-1 archives built, not yet deployed to the server.
+Status: M0 done (archives run on the lead's Mac until the VPS exists, issue #1). M1 harness in review.
 
 ## Day-1 archives (`ingestion/`)
 
@@ -26,7 +26,20 @@ docker compose up -d --build
 ```
 
 `docker compose ps` shows `unhealthy` when any source is silent for 10 minutes.
-Tests: `python -m tests.test_archive`, `python -m tests.test_guard`.
+Tests: `python -m pytest -q tests`.
+
+## Harness (`harness/`, protected)
+
+```bash
+python -m ingestion.binance_history     # development data into data/store (never the holdout)
+python -m harness.canaries              # self-tests: leak, random, known effect
+python -m harness.run strategies/H-001 levels=fib lookback_h=240
+```
+
+`harness.run` refuses a hypothesis whose `spec.yaml` and `strategy.py` are not merged on
+`origin/main` unchanged, params outside the registered grid, a used-up trial budget and strategy
+code that reaches past the `PITView`. Every started trial goes into the hash-chained registry
+(`data/registry/`), including crashes. The one-page report lands in `strategies/H-###/reports/`.
 
 ## Protected paths
 
