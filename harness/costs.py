@@ -5,11 +5,13 @@ Funding is applied from real funding data, not here.
 
 v1 limits, to be fixed in v2:
 - Fees are OKX regular-tier perp fees. X-Perps fee tiers are an open item (SPEC 15).
-- Spread and impact tiers come from only ~20 minutes of X-Perps books (research/xperps_costs.py,
-  2026-09-24): a 25k USD market buy cost <1 bp on BTC/ETH, 4 bp on SOL/HYPE, 9-16 bp on
-  XRP/DOGE/BNB/SUI/LINK/ADA, median 54 bp over the 116 instruments whose book could fill it.
+- Spread and impact tiers from ~3 hours of X-Perps books (research/xperps_costs.py, 168 one-minute
+  samples, 2026-09-24), mapped to the coin's Binance volume in the last 90 days of dev data:
+  >= 5B (BTC, ETH) 0.3-0.9 bp; 1-5B (SOL, XRP, DOGE) 3-12 bp; 0.2-1B (SUI, ADA, BNB, LINK, AVAX,
+  UNI, BCH, ...) median ~15 bp with outliers to 78 bp; thinner books median ~54 bp.
   Re-measure once the archive has 2+ weeks. The tiers key on Binance volume because X-Perps
-  has no history before 2026-04.
+  has no history before 2026-04. Binance volumes were lower in 2020-21, so old trades land in
+  more expensive tiers: conservative.
 """
 
 MAKER_FEE = 0.0002
@@ -17,7 +19,7 @@ TAKER_FEE = 0.0005
 
 # Half-spread plus impact for a ~25k USD order on X-Perps, by the coin's 30-day average daily
 # quote volume on Binance (USD).
-TIERS = [(5e9, 0.0001), (5e8, 0.0015), (1e8, 0.0030), (0, 0.0060)]
+TIERS = [(5e9, 0.0001), (1e9, 0.0008), (2e8, 0.0015), (0, 0.0040)]
 # Stops in fast markets: extra slippage as a share of the bar's high-low range.
 STOP_RANGE_SLIP = 0.10
 

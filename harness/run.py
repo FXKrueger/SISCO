@@ -29,7 +29,8 @@ TREND_BASELINE = "B-001"
 # ponytail: a token lint, not a sandbox. The verifier's code review is the second line.
 FORBIDDEN = [r"\bopen\(", r"\bimport os\b", r"\bfrom os\b", r"duckdb", r"read_parquet", r"read_csv", r"urllib", r"requests",
              r"socket", r"subprocess", r"anthropic", r"claude", r"\._", r"__dict__", r"\bglobals\(", r"\bgetattr\(",
-             r"\binspect\b", r"\bgc\b", r"\bPanel\b", r"harness\.(engine|registry|run|stats|costs)", r"\beval\(", r"\bexec\("]
+             r"\binspect\b", r"\bgc\b", r"\bPanel\b", r"harness\.(engine|registry|run|stats|costs)", r"\beval\(", r"\bexec\(",
+             r"__import__", r"\bimportlib\b", r"\bpathlib\b", r"\bbuiltins\b", r"sys\.modules", r"\bcompile\(", r"\bsetattr\("]
 
 
 class Refused(Exception):
@@ -40,13 +41,18 @@ def sha(b):
     return hashlib.sha256(b).hexdigest()
 
 
+def strategy_files(folder):
+    """Everything in the strategy folder that can change behavior: all files except reports."""
+    return sorted(p for p in folder.rglob("*") if p.is_file() and "reports" not in p.parts and p.name != "REPORT.md"
+                  and "__pycache__" not in p.parts)
+
+
 def check_registered(folder):
     subprocess.run(["git", "fetch", "-q", "origin", "main"], check=True)
-    for name in ("spec.yaml", "strategy.py"):
-        path = (folder / name).as_posix()
-        merged = subprocess.run(["git", "show", f"origin/main:{path}"], capture_output=True)
-        if merged.returncode or merged.stdout != (folder / name).read_bytes():
-            raise Refused(f"{path} is not merged on origin/main as-is. Register it by PR first.")
+    for f in strategy_files(folder):
+        merged = subprocess.run(["git", "show", f"origin/main:{f.as_posix()}"], capture_output=True)
+        if merged.returncode or merged.stdout != f.read_bytes():
+            raise Refused(f"{f.as_posix()} is not merged on origin/main as-is. Register it by PR first.")
 
 
 def lint(src):
@@ -89,7 +95,7 @@ def evaluate(trades_1x, trades_2x, panel, hypothesis, start):
         "trials_in_hypothesis": int(matrix.shape[1]),
         "btc_buy_hold_sharpe": bh,
         "trend_baseline_sharpe": baseline_sharpe(hypothesis),
-        "null": stats.null_test(trades_2x, panel),
+        "null": stats.null_test(trades_2x, panel, sessions=SESSIONS_UTC),
         "regimes": stats.by_window(trades_2x, REGIMES),
         "crashes": stats.by_window(trades_2x, CRASHES),
         "skipped_signals": trades_2x.attrs.get("skipped_signals", 0),
@@ -207,7 +213,7 @@ def main(folder, params):
     used = sum(e["hypothesis"] == hyp and e["kind"] == "start" and e["trial_id"] not in bad for e in registry.entries())
     if used >= budget:
         raise Refused(f"trial budget used up ({used}/{budget}). The hypothesis is closed.")
-    src = (folder / "strategy.py").read_text()
+    src = "\n".join(f.read_text() for f in strategy_files(folder) if f.suffix == ".py")
     lint(src)
     record = {"hypothesis": hyp, "params": params, "spec_sha256": sha((folder / "spec.yaml").read_bytes()),
               "code_sha256": sha(src.encode()), "dev_end": DEV_END.isoformat()}

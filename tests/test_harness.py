@@ -145,3 +145,26 @@ def test_invalidation_only_from_merged_file(tmp_path, monkeypatch):
     assert registry.invalidated() == {s, r} and registry.series("H-X").empty
     merged["text"] = ""  # a local edit that is not on origin/main does not count
     assert registry.invalidated() == set() and registry.series("H-X").shape[1] == 1
+
+
+def test_review_fixes_pit_end_funding_window_stale_delay():
+    p = panel(FLAT * 4, funding=[(8, 0.001)])
+    v = PITView(p, T0 + pd.Timedelta(hours=10))
+    assert v.bars("X", end=T0 + pd.Timedelta(hours=5)).available_time.max() == T0 + pd.Timedelta(hours=5)
+    # Stopped out inside the 07:00 bar: the 08:00 settlement is not charged.
+    rows = [(100, 100.5, 99.5, 100)] * 7 + [(100, 100.5, 89, 90)] + FLAT * 2  # stop hit in the 07:00 bar
+    p = panel(rows, funding=[(8, 0.001)])
+    tr = engine.simulate(T0 + pd.Timedelta(hours=3), sig(stop=95, target=120), p)
+    assert tr["reason"] == "stop" and tr["exit_time"] == T0 + pd.Timedelta(hours=8) and tr["funding_R"] == 0
+    # Reacting 2 h late to a market signal whose stop is already through: no trade.
+    p = panel(FLAT + [(100, 100.5, 99.5, 100), (94, 94.5, 93.5, 94), (94, 94.5, 93.5, 94)])
+    assert engine.simulate(T0 + pd.Timedelta(hours=3), sig(), p, delay_h=1) is None
+
+
+def test_null_test_is_bounded_and_fair_on_a_random_walk():
+    p = canaries.synthetic_panel(days=120, substeps=60)
+    tr = engine.backtest(engine.generate(canaries.RandomEntries(), p, p.timeline(6)), p, 2.0)
+    null = stats.null_test(tr, p, runs=500)
+    per_trade = null["p95"] / len(tr)
+    assert -1 < per_trade < 0.5  # bounded payoffs: no +/-20 R null trades
+    assert 0.02 < null["beats_share"] < 0.98  # random entries do not beat random entries
