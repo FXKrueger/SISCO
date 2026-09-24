@@ -1,0 +1,15 @@
+services:
+  archiver:
+    build: .
+    restart: unless-stopped
+    stop_signal: SIGINT  # lets the archive close its files cleanly
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "ingestion", "health"]
+      interval: 60s
+      start_period: 120s
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"

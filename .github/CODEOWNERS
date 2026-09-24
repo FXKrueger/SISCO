@@ -1,0 +1,11 @@
+# Changes here need the lead's review (CLAUDE.md hard rule 1, SPEC 12.2).
+# Enforced by .github/rulesets/main.json once it is applied (needs GitHub Pro for a private repo).
+/harness/            @FXKrueger
+/risk/               @FXKrueger
+/execution/          @FXKrueger
+/registry/           @FXKrueger
+/config/limits.yaml  @FXKrueger
+# The guardrails themselves
+/.github/            @FXKrueger
+/.claude/            @FXKrueger
+/CLAUDE.md           @FXKrueger
