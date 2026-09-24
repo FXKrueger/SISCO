@@ -5,6 +5,7 @@ gets back either a sized order or the reason it is refused. Checked before every
 """
 
 import math
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,8 +14,21 @@ import yaml
 LIMITS_FILE = Path(__file__).parents[1] / "config" / "limits.yaml"
 
 
-def load_limits(path=LIMITS_FILE):
-    return yaml.safe_load(Path(path).read_text())
+def load_limits(path=None):
+    """The limits as merged on origin/main: only a PR the lead approves can change mode, limits or
+    approved strategies (CLAUDE.md rules 1 and 7). A local copy that differs is refused, so a local
+    edit can never switch to live or raise a limit. path: read that file instead (tests only)."""
+    if path is not None:
+        return yaml.safe_load(Path(path).read_text())
+    repo = LIMITS_FILE.parents[1]
+    subprocess.run(["git", "-C", str(repo), "fetch", "-q", "origin", "main"], capture_output=True)
+    merged = subprocess.run(["git", "-C", str(repo), "show", "origin/main:config/limits.yaml"], capture_output=True, text=True)
+    if merged.returncode:
+        raise SystemExit("cannot read config/limits.yaml from origin/main (git fetch failed?). Not trading on unverified limits.")
+    if LIMITS_FILE.exists() and LIMITS_FILE.read_text() != merged.stdout:
+        raise SystemExit("config/limits.yaml differs from origin/main. Limits change only by a PR the lead merges; "
+                         "run `git checkout config/limits.yaml` or `git pull`.")
+    return yaml.safe_load(merged.stdout)
 
 
 @dataclass

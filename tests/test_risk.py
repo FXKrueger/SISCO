@@ -1,8 +1,8 @@
 import pytest
 
-from risk.engine import Account, Position, Proposal, check, halt_reason, load_limits
+from risk.engine import LIMITS_FILE, Account, Position, Proposal, check, halt_reason, load_limits
 
-L = load_limits()
+L = load_limits(LIMITS_FILE)
 
 
 def acct(**kw):
@@ -60,3 +60,19 @@ def test_loss_limits_and_halts():
 def test_bad_geometry_and_margin():
     assert "opposite sides" in check(btc(stop=105_000), acct(), L)[1]
     assert "free margin" in check(btc(), acct(available=100), L)[1]
+
+
+def test_limits_come_from_origin_main_only(tmp_path, monkeypatch):
+    import subprocess
+
+    import risk.engine as eng
+
+    local = tmp_path / "limits.yaml"
+    monkeypatch.setattr(eng, "LIMITS_FILE", local)
+    merged = "mode: paper\n"
+    monkeypatch.setattr(eng.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, merged, ""))
+    local.write_text(merged)
+    assert load_limits() == {"mode": "paper"}
+    local.write_text("mode: live\n")  # a local edit, not merged
+    with pytest.raises(SystemExit, match="differs from origin/main"):
+        load_limits()

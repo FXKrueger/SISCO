@@ -1,6 +1,6 @@
 # SISCO: System Specification
 
-Status: v1.1, 2026-09-24 (session mode, D19). This is the source of truth for humans and agents.
+Status: v1.2, 2026-09-24 (session mode D19, trading core D20-D22). Setup: [SETUP.md](SETUP.md). Daily use: [USAGE.md](USAGE.md). This is the source of truth for humans and agents.
 The reasons behind each choice are in [DECISIONS.md](DECISIONS.md).
 
 ## 1. Goal and scope
@@ -340,18 +340,29 @@ Custody: keep only the margin needed plus a buffer on the exchange. The rest sta
 Session mode (D19): the system runs only when the lead starts a session on one of their
 devices. Nothing trades or decides between sessions.
 
-- Venue adapter interface. OKX X-Perps first, Kraken later.
+- Modes (`config/limits.yaml`, merged on origin/main only, D22): `paper` (shadow fills on live
+  X-Perps prices, `execution/paper.py`), `demo` (OKX demo trading) and `live`. A strategy's stage
+  (`paper`, `live_small`, `live`) decides whether it trades on paper or on the account.
+- Venue adapter interface (`execution/okx.py`). OKX X-Perps first, Kraken later.
+- Live signals use the same data sources and code as the research (`ops/live_data.py`: Binance
+  bars, only coins with development history). Levels are translated to X-Perps prices by the
+  current price ratio.
 - A session: catch up the data missed since the last session, run the canaries, reconcile
   actual positions and orders against expected, check the loss limits, close positions whose
   time limit has passed, then show the trade cards.
 - Semi-automatic. The trade card is shown in the session: coin, side, entry, stop, target,
   size, P(win), briefing, evidence links. Approve, or reject with a reason.
 - Every entry is sent with its stop and target attached, so the exchange places them together
-  with the entry. Isolated margin. Open positions are protected while no device runs.
+  with the entry. Both are market orders on trigger (D21). Isolated margin, net position mode,
+  leverage chosen so liquidation is at least 2x the stop distance away (`risk/engine.py`).
+  Open positions are protected while no device runs.
   Limit entries not filled by the next session are cancelled there.
-- Kill switch, checked at every session start and before every order: loss limits, repeated
-  API errors, reconciliation mismatch. Action: cancel open entries, keep stops, tell the lead.
-  Only the lead can resume.
+- Kill switch, checked at every session start and before every order: loss limits (from equity
+  snapshots, cash flows excluded), repeated API or order errors, reconciliation mismatch, a
+  position without a stop. Action: cancel open entries, keep stops, tell the lead. Only the lead
+  can resume (`--resume`, interactive terminal).
+- Journal (`ops/journal.py`, `data/journal.db`): every order, trade, veto and session. Tax export
+  per year (`ops/tax.py`).
 - Full-auto: deferred. It needs an always-on host and is decided when a strategy qualifies
   (at least 50 live trades in which vetoes added nothing).
 - Veto log: every human and LLM veto is recorded with a reason. The harness reports whether
@@ -415,7 +426,8 @@ until a backtest looks good.
 ## 13. Operations
 
 - Infrastructure: the lead's own machines, Docker Compose, Python (D19). No server.
-- Backup: Time Machine on the Mac that holds `data/`. Revisit when disk use reaches 50%.
+- Backup: Time Machine on the Mac that holds `data/` (archives, journal, registry, LLM cache).
+  Revisit when disk use reaches 50%.
 - Monitoring: the archiver health check (`docker compose ps`) and the session checks.
 - Reports: session report, weekly research report.
 - Tax: per-trade export (time, instrument, side, size, price, fees, funding, PnL in EUR with the
@@ -434,8 +446,9 @@ until a backtest looks good.
 
 ## 15. Open items to verify
 
-- OKX X-Perps: fee tiers, max leverage per coin, minimum order size, API rate limits, demo
-  trading. Without demo trading, paper trading uses shadow fills on the live X-Perps order book.
+- OKX X-Perps: fee tiers. Demo trading exists for EEA (checked 2026-09-24). The private API
+  calls (orders, positions history, balance fields) are tested only against a simulated exchange:
+  verify on demo before live (SETUP.md stage 5).
 - Training cutoff of the pinned Opus model. It defines the clean test window for phase B.
 - Real subscription usage limits under pipeline load.
 - Tax classification of X-Perps (5-year expiry futures) in Germany.

@@ -160,3 +160,33 @@ Decided 2026-09-24. Supersedes the server parts of D10, D11 and D17.
 - Costs: liquidations during gaps are lost (can be bought later), phase B events are traded at
   the next session, not within minutes.
 - Revisit: when a strategy fails only the delay test, or when full-auto qualifies.
+
+## D20. Fixed holdout window
+
+Decided 2026-09-24 by merging the harness (PR #9, #10).
+
+- Decision: the holdout is the fixed window 2025-09-24 to 2026-09-24 (`harness/config.py`).
+  Development data ends 2025-09-01; the three weeks between are an embargo. Data after
+  2026-09-24 is forward data for paper trading and phase B, never development data.
+- Why: a rolling "last 12 months" would lock every new archive away for a year.
+- Consequence: the 10 October 2025 crash (SPEC 6.2 #9) is inside the holdout. Only the gatekeeper
+  replays it.
+
+## D21. Market orders on stop and target
+
+Decided 2026-09-24 (PR #16).
+
+- Decision: stop and target go to OKX attached to the entry, both as market orders on trigger.
+  The cost model charges target exits taker fee plus spread, like stops.
+- Why: OKX treats the attached stop and target as one OCO pair. A limit target that triggered but
+  did not fill would cancel the stop and leave the position unprotected.
+
+## D22. Guardrails in code, not only in rules
+
+Decided 2026-09-24 (PR #16 and the hardening PR).
+
+- Decision: the session reads `config/limits.yaml` (mode, limits, approved strategies) only as
+  merged on origin/main, and refuses a different local copy. Registration, invalidations and
+  verifier approvals are also read from origin/main. The agent guard blocks the gatekeeper, the
+  holdout download, `--resume` and `--cashflow`; `--resume` also needs an interactive terminal.
+- Why: CLAUDE.md rules 1, 2 and 7 hold even if an agent edits local files.

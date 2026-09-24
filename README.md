@@ -8,7 +8,11 @@ market data (price, derivatives positioning, liquidity, on-chain) with LLM-extra
 - [Decision log](docs/DECISIONS.md)
 - [Agent guide](CLAUDE.md)
 
-Status: M0 done (archives run on the lead's Mac until the VPS exists, issue #1). M1 harness in review.
+Status: research factory, trading core (paper, demo, live) and LLM event pipeline built. No
+strategy has passed the gates yet, so nothing trades.
+
+- **[Setup guide](docs/SETUP.md)**: from an empty Mac to paper, demo and live trading.
+- **[Usage guide](docs/USAGE.md)**: daily sessions, kill switch, research workflow, tax.
 
 ## Day-1 archives (`ingestion/`)
 
@@ -26,7 +30,7 @@ docker compose up -d --build
 ```
 
 `docker compose ps` shows `unhealthy` when any source is silent for 10 minutes.
-Tests: `python -m pytest -q tests`.
+Tests: `python -m pytest -q tests`. Harness self-test: `python -m harness.canaries`.
 
 ## Harness (`harness/`, protected)
 
