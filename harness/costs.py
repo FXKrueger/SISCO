@@ -33,8 +33,8 @@ def entry_cost(kind, daily_quote_volume):
 
 
 def exit_cost(reason, daily_quote_volume, bar_range_pct=0.0):
-    if reason == "target":
-        return MAKER_FEE
+    # Targets are market orders on trigger, like stops (execution/okx.py: a limit target in an OCO
+    # pair could leave a position without a stop), so they pay taker fee and spread too.
     cost = TAKER_FEE + half_spread(daily_quote_volume)
     if reason == "stop":
         cost += STOP_RANGE_SLIP * bar_range_pct

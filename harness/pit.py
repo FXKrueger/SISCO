@@ -50,26 +50,34 @@ class Panel:
         return 0.0 if pd.isna(v) else float(v)
 
     @classmethod
-    def load(cls, coins=None, top_n=30, start=None):
-        """Rank all coins by liquidity, then load full bars only for coins that ever make the universe."""
-        end = pd.Timestamp(DEV_END)  # never past development data
-        files = {p.stem.removesuffix("USDT"): p for p in sorted((STORE / "klines_1h").glob("*.parquet"))}
-        vols = {}
-        for coin, p in files.items():
-            v = pd.read_parquet(p, columns=["available_time", "quote_volume"])
-            vols[coin] = v[v.available_time < end]
+    def load(cls, coins=None, top_n=30, start=None, stores=(STORE,), end=DEV_END):
+        """Rank all coins by liquidity, then load full bars only for coins that ever make the universe.
+        Default: the development store, cut at DEV_END. Only the gatekeeper passes the holdout store."""
+        end = pd.Timestamp(end)
+
+        def read(kind, name, cols=None):
+            parts = [pd.read_parquet(s / kind / name, columns=cols) for s in stores if (s / kind / name).exists()]
+            if not parts:
+                return None
+            d = pd.concat(parts).drop_duplicates("available_time" if cols else "event_time")
+            return d[d.available_time < end].sort_values("available_time")
+
+        names = sorted({p.name for s in stores for p in (s / "klines_1h").glob("*.parquet")})
+        vols = {n.removesuffix("USDT.parquet"): read("klines_1h", n, ["available_time", "quote_volume"]) for n in names}
         universe, _ = liquidity(vols, top_n, 30)
         keep = set(coins) if coins else set().union(*universe.values())
         kl, fu = {}, {}
-        for coin in sorted(keep & set(files)):
-            d = pd.read_parquet(files[coin])
-            d = d[(d.available_time < end) & (d.available_time >= pd.Timestamp(start or "1970-01-01", tz="UTC"))]
+        for n in names:
+            coin = n.removesuffix("USDT.parquet")
+            if coin not in keep:
+                continue
+            d = read("klines_1h", n)
+            d = d[d.available_time >= pd.Timestamp(start or "1970-01-01", tz="UTC")]
             if len(d):
                 kl[coin] = d
-            fp = STORE / "funding" / files[coin].name
-            if fp.exists():
-                f = pd.read_parquet(fp)
-                fu[coin] = f[f.available_time < end]
+            f = read("funding", n)
+            if f is not None:
+                fu[coin] = f
         return cls(kl, fu, top_n=top_n, volumes=vols)
 
     def sessions(self, hours):

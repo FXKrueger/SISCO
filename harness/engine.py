@@ -148,20 +148,40 @@ def last_close(panel, coin, t):
     return float(d.close.iat[i - 1]) if i else None
 
 
-def backtest(signals, panel, cost_mult=1.0, max_open=5, sessions=None, delay_h=0):
-    """Simulate signals in time order. One position per coin, at most max_open (5R, SPEC 10) at once.
-    Pending limit orders count as open until they fill or expire."""
+def beta(panel, coin, t, days=30):
+    """Beta of hourly returns to BTC over the `days` days before the day of t (known at t).
+    Same rule as the live risk engine (ops/live_data.beta_to_btc). Cached per coin and day."""
+    if coin == "BTC" or "BTC" not in panel.bars:
+        return 1.0
+    cache = panel.__dict__.setdefault("_betas", {})
+    if coin not in cache:
+        r = {c: np.log(panel.bars[c].set_index("available_time").close).diff() for c in (coin, "BTC")}
+        x = pd.concat(r, axis=1).dropna()
+        cov = x[coin].rolling(24 * days, min_periods=48).cov(x["BTC"])
+        b = (cov / x["BTC"].rolling(24 * days, min_periods=48).var()).groupby(x.index.floor("D")).last().shift(1)
+        cache[coin] = b.fillna(1.0)
+    b = cache[coin]
+    return float(b.asof(pd.Timestamp(t).floor("D"))) if len(b) and pd.Timestamp(t).floor("D") >= b.index[0] else 1.0
+
+
+def backtest(signals, panel, cost_mult=1.0, max_open=5, sessions=None, delay_h=0, max_same_direction=3.0):
+    """Simulate signals in time order with the live risk rules (SPEC 10, risk/engine.py): one
+    position per coin, at most max_open 1R positions, BTC-beta adjusted exposure at most
+    max_same_direction R per direction. Pending limit orders count as open until they fill or expire."""
     trades, busy, skipped = [], {}, 0
     for t, sig in sorted(signals, key=lambda x: x[0]):
-        busy = {c: u for c, u in busy.items() if u > t}
-        if sig.coin in busy or len(busy) >= max_open:
+        busy = {c: v for c, v in busy.items() if v[0] > t}
+        s = 1 if sig.side == "long" else -1
+        b = beta(panel, sig.coin, t) if max_same_direction else 1.0
+        exposure = sum(v[1] for v in busy.values()) + s * b
+        if sig.coin in busy or len(busy) >= max_open or (max_same_direction and abs(exposure) > max_same_direction + 1e-9):
             skipped += 1
             continue
         tr = simulate(t, sig, panel, cost_mult, sessions, delay_h)
         if tr is None:
-            busy[sig.coin] = next_session(t + pd.Timedelta(hours=delay_h) + sig.entry.expiry, sessions)
+            busy[sig.coin] = (next_session(t + pd.Timedelta(hours=delay_h) + sig.entry.expiry, sessions), s * b)
             continue
-        busy[sig.coin] = tr["exit_time"]
+        busy[sig.coin] = (tr["exit_time"], s * b)
         trades.append(tr)
     df = pd.DataFrame(trades)
     if len(df):

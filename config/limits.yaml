@@ -1,0 +1,27 @@
+# Protected (CLAUDE.md rule 1). Only the lead changes this file, by PR.
+# Agents may halt trading. They may never resume trading, raise limits, change the mode or
+# promote a strategy (CLAUDE.md rule 7).
+
+# paper: simulated fills on live X-Perps prices, no keys needed.
+# demo:  OKX demo trading (x-simulated-trading), demo API keys.
+# live:  real money.
+mode: paper
+
+# Risk (SPEC 10). 1R = risk_per_trade_pct of equity.
+risk_per_trade_pct: 0.5
+max_open_risk_R: 5            # total open risk: no new trades above this
+max_same_direction_R: 3       # BTC-beta adjusted, per direction
+daily_loss_stop_R: 3          # UTC day, realized + open: no new trades for the rest of the day
+weekly_loss_stop_R: 6         # rolling 7 days: halt until the lead reviews
+drawdown_halt_R: 20           # from the equity peak: halt everything, full review
+max_leverage: 5
+liquidation_distance_x_stop: 2   # liquidation price at least 2x the stop distance away
+max_consecutive_api_errors: 3    # kill switch
+
+# Strategies approved by the lead. Stages (SPEC 6.4): paper, live_small, live.
+# live_small: size 0.25 for the first 30 live trades, then 0.5 for 30, then the lead promotes.
+# Example:
+#   - id: H-002
+#     params: {coins: 3, lookback_d: 30}
+#     stage: paper
+strategies: []
