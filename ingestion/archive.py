@@ -40,6 +40,7 @@ class Archive:
             self.last_seen[source] = ns
         else:
             row["meta"] = meta
+            self.last_seen.setdefault(source, ns)  # a source that never delivers still goes stale
         cur[1].write(json.dumps(row).encode() + b"\n")
         if time.monotonic() - self._last_flush > self.flush_every:
             self.flush()
