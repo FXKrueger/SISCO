@@ -9,17 +9,16 @@ economic_reason: >
 universe:
   venue: binance_um        # research history, D15. Costs from the X-Perps cost model.
   top_n: 20                # by 30-day quote volume, point-in-time
-  step_hours: 4
 rules: |
-  Every 4 hours, per coin in the universe:
-  1. Swing: highest high H and lowest low L over the last lookback_h hours. Skip if (H-L)/L < 5x ATR.
+  At every session (harness.config SESSIONS_UTC, D19), per coin in the universe:
+  1. Swing: highest high H and lowest low L over the last lookback_h hours. Skip if H-L < 5 ATR.
      ATR = mean hourly high-low over the last 24 hours.
   2. Up swing (L before H): levels = H - r*(H-L). Long limit at the nearest level below the
      last close, only if it is within 2 ATR of the close. Down swing: mirror, short.
   3. r = 0.382, 0.5, 0.618 for levels=fib. For levels=random, 3 ratios drawn uniformly from
      [0.3, 0.7], seeded by (coin, swing timestamps), so the control is reproducible.
-  4. Stop 1 ATR beyond the level, target 2.5 ATR from the level (2.5R), time limit 72 hours,
-     limit order expiry 4 hours.
+  4. Stop 1 ATR beyond the level, target 2.5 ATR from the level (2.5R), time limit 72 hours
+     (exit at the first session after it). The limit order is valid until the next session.
 params:
   levels: [fib, random]
   lookback_h: [120, 240]

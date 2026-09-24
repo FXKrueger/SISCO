@@ -4,6 +4,10 @@ Timing (SPEC 6.2 #1): a signal made at t (a bar close) fills at the earliest in 
 starts at t. Market orders fill at that bar's open. Limit orders fill when price trades through
 the limit before expiry. Everything is measured in R: 1R = the distance from entry to stop.
 
+Session mode (D19): with sessions set, time-limit exits and limit-order expiries happen at the
+first session at or after the limit, because nothing runs between sessions. delay_h shifts the
+earliest fill by that many hours (reaction-delay test).
+
 Conservative intrabar rules (bars have no tick order):
 - stop and target touched in the same bar: the stop wins,
 - a limit filled inside a bar can be stopped in that bar but not reach target in it,
@@ -21,15 +25,25 @@ class SignalError(Exception):
     """A strategy produced an impossible signal (stop or target on the wrong side)."""
 
 
-def generate(strategy, panel, step_hours=1):
+def next_session(ts, sessions):
+    """First session time (UTC hour in sessions) at or after ts. sessions None: ts itself."""
+    if not sessions:
+        return ts
+    ts = pd.Timestamp(ts).ceil("h")
+    while ts.hour not in sessions:
+        ts += pd.Timedelta(hours=1)
+    return ts
+
+
+def generate(strategy, panel, times):
     out = []
-    for t in panel.timeline(step_hours):
+    for t in times:
         for s in strategy.on_bar(t, PITView(panel, t)) or []:
             out.append((t, s))
     return out
 
 
-def simulate(t, sig, panel, cost_mult=1.0):
+def simulate(t, sig, panel, cost_mult=1.0, sessions=None, delay_h=0):
     """One signal against the bars after t. Returns a trade dict, or None if a limit never filled."""
     d = panel.bars.get(sig.coin)
     if d is None:
@@ -39,10 +53,11 @@ def simulate(t, sig, panel, cost_mult=1.0):
     if sig.coin not in cache:
         cache[sig.coin] = (d.event_time.to_numpy("datetime64[ns]"), *(d[k].to_numpy(float) for k in ("open", "high", "low", "close")))
     et, o, h, l, c = cache[sig.coin]
-    i = np.searchsorted(et, np.datetime64(t.tz_convert(None), "ns"))
+    i0 = np.searchsorted(et, np.datetime64(t.tz_convert(None), "ns"))
+    i = np.searchsorted(et, np.datetime64((t + pd.Timedelta(hours=delay_h)).tz_convert(None), "ns"))
     if i >= len(d):
         return None
-    ref = sig.entry.price if sig.entry.kind == "limit" else (c[i - 1] if i else o[i])
+    ref = sig.entry.price if sig.entry.kind == "limit" else (c[i0 - 1] if i0 else o[i0])
     if not (side * (ref - sig.stop) > 0 and side * (sig.target - ref) > 0):
         raise SignalError(f"{sig} at {t}: stop and target must be on opposite sides of entry {ref}")
 
@@ -51,7 +66,8 @@ def simulate(t, sig, panel, cost_mult=1.0):
     if sig.entry.kind == "market":
         j, entry = i, o[i]
     else:
-        expiry = np.datetime64((t + sig.entry.expiry).tz_convert(None), "ns")
+        expiry = next_session(t + pd.Timedelta(hours=delay_h) + sig.entry.expiry, sessions)
+        expiry = np.datetime64(expiry.tz_convert(None), "ns")
         j, entry = i, None
         while j < len(d) and et[j] < expiry:
             if side * (sig.entry.price - o[j]) >= 0:  # opened through the limit: fill at the better open
@@ -68,7 +84,8 @@ def simulate(t, sig, panel, cost_mult=1.0):
         risk = abs(ref - sig.stop)
 
     # Exit
-    deadline = np.datetime64((pd.Timestamp(et[j], tz="UTC") + sig.time_limit).tz_convert(None), "ns")
+    deadline = next_session(pd.Timestamp(et[j], tz="UTC") + sig.time_limit, sessions)
+    deadline = np.datetime64(deadline.tz_convert(None), "ns")
     k, reason, exit_px = j, None, None
     while k < len(d):
         hit_stop = (l[k] <= sig.stop) if side == 1 else (h[k] >= sig.stop)
@@ -108,7 +125,7 @@ def simulate(t, sig, panel, cost_mult=1.0):
     }
 
 
-def backtest(signals, panel, cost_mult=1.0, max_open=5):
+def backtest(signals, panel, cost_mult=1.0, max_open=5, sessions=None, delay_h=0):
     """Simulate signals in time order. One position per coin, at most max_open (5R, SPEC 10) at once.
     Pending limit orders count as open until they fill or expire."""
     trades, busy, skipped = [], {}, 0
@@ -117,9 +134,9 @@ def backtest(signals, panel, cost_mult=1.0, max_open=5):
         if sig.coin in busy or len(busy) >= max_open:
             skipped += 1
             continue
-        tr = simulate(t, sig, panel, cost_mult)
+        tr = simulate(t, sig, panel, cost_mult, sessions, delay_h)
         if tr is None:
-            busy[sig.coin] = t + sig.entry.expiry
+            busy[sig.coin] = next_session(t + pd.Timedelta(hours=delay_h) + sig.entry.expiry, sessions)
             continue
         busy[sig.coin] = tr["exit_time"]
         trades.append(tr)

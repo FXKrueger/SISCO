@@ -20,7 +20,7 @@ import pandas as pd
 import yaml
 
 from . import engine, registry, stats
-from .config import CRASHES, DEV_END, REGIMES, TRIAL_BUDGET_DEFAULT
+from .config import CRASHES, DELAYS_H, DEV_END, REGIMES, SESSIONS_UTC, TRIAL_BUDGET_DEFAULT
 from .pit import Panel
 
 GATES = {"dsr": 0.95, "pbo": 0.2}
@@ -120,6 +120,9 @@ def report(folder, spec, trial_id, params, r, g, verdict):
         flags.append(f"{r['skipped_signals']} signals skipped (position or 5R limit)")
     if r["net_R_1x"] > 0 >= r["net_R_2x"]:
         flags.append("edge disappears at 2x costs")
+    late = r.get("delay_net_R_2x", {})
+    if late and r["net_R_2x"] > 0 and min(late.values()) <= 0:
+        flags.append("edge disappears with slower reaction: it needs faster execution than sessions")
     flags.append("cost model v1: X-Perps spread and fees not yet calibrated")
     reg = "\n".join(f"| {k} | {v['trades']} | {v['net_R']:.1f} | {fmt(v['win_rate'])} |" for k, v in r["regimes"].items())
     crash = "\n".join(f"| {k} | {v['trades']} | {v['net_R']:.1f} |" for k, v in r["crashes"].items())
@@ -141,6 +144,8 @@ def report(folder, spec, trial_id, params, r, g, verdict):
 - Max drawdown: {r['max_dd_R_2x']:.1f} R
 - Trades: {r['trades']}, win rate {fmt(r['win_rate'])}
 - BTC buy-and-hold Sharpe, same period: {fmt(r['btc_buy_hold_sharpe'])}
+- Reaction delay, net R at 2x costs: {', '.join(f"+{h} h: {v:.1f}" for h, v in r.get('delay_net_R_2x', {}).items()) or 'n/a'}
+- Decisions at sessions {SESSIONS_UTC} UTC only; time exits and order expiries wait for the next session (D19)
 - Null test (1000 random entries): strategy beats {fmt(null.get('beats_share'))} of runs, 95th pct {fmt(null.get('p95'), 1)} R
 
 ## Gates (stage 3)
@@ -198,10 +203,15 @@ def main(folder, params):
     try:
         uni = spec["universe"]
         panel = Panel.load(top_n=uni.get("top_n", 30))
-        signals = engine.generate(load_strategy(folder)(params), panel, uni.get("step_hours", 1))
-        t1, t2 = engine.backtest(signals, panel, 1.0), engine.backtest(signals, panel, 2.0)
+        signals = engine.generate(load_strategy(folder)(params), panel, panel.sessions(SESSIONS_UTC))
+
+        def bt(cost_mult, delay_h=0):
+            return engine.backtest(signals, panel, cost_mult, sessions=SESSIONS_UTC, delay_h=delay_h)
+
+        t1, t2 = bt(1.0), bt(2.0)
         start = panel.timeline()[0]
         r, series = evaluate(t1, t2, panel, hyp, start)
+        r["delay_net_R_2x"] = {h: float(x.net_R.sum()) if len(x := bt(2.0, h)) else 0.0 for h in DELAYS_H}
         g, verdict = gates(r)
     except Exception as e:
         registry.append({"kind": "error", "start": start_id, **record, "error": traceback.format_exc(limit=3)})

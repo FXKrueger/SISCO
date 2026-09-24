@@ -1,6 +1,6 @@
 # SISCO: System Specification
 
-Status: v1, 2026-09-24. This is the source of truth for humans and agents.
+Status: v1.1, 2026-09-24 (session mode, D19). This is the source of truth for humans and agents.
 The reasons behind each choice are in [DECISIONS.md](DECISIONS.md).
 
 ## 1. Goal and scope
@@ -56,7 +56,7 @@ Sources -> Ingestion -> Point-in-time store (Parquet + DuckDB)
                     v                              v
              Risk engine -> Execution (semi-auto / auto) -> OKX
                     v
-      Monitoring, kill switch, Telegram, reports
+      Session checks, kill switch, reports
 
 Research factory (agents) -> Harness -> Trial registry -> Gates -> Lead approval
 ```
@@ -72,7 +72,7 @@ Planned folders:
 - `engine/`: meta-model and sizing.
 - `risk/`: limits and checks. Protected.
 - `execution/`: venue adapters, order management, reconciliation. Protected.
-- `ops/`: monitoring, alerts, Telegram bot, tax export.
+- `ops/`: session checks, reports, tax export.
 - `registry/`: trial registry. Append-only, written by the harness only.
 - `config/`: `limits.yaml` (protected), `llm.yaml` (pinned model and CLI version).
 
@@ -131,6 +131,12 @@ These start before anything else, because the data cannot be downloaded later:
 2. OKX X-Perps order book snapshots, trades, funding.
 3. Liquidation streams (Binance, OKX, Hyperliquid).
 
+They run whenever the lead's machine runs (D19), not around the clock. Every connect and drop
+is recorded, so coverage gaps are visible. What gaps cost: order books feed the cost model and
+only need a sample. Text is mostly caught late rather than lost (feeds keep recent items,
+Bluesky backfills up to 72 h). Liquidations in gaps are lost; history can be bought later
+(for example Tardis.dev) if a hypothesis needs it.
+
 ## 6. Validation harness
 
 ### 6.1 Interface
@@ -181,6 +187,10 @@ The harness owns fills, costs, funding, labels, statistics and reports.
 9. Crash stress: replay March 2020, May 2021, November 2022 (FTX) and 10 October 2025,
    with realistic stop slippage.
 10. Holdout: the last 12 months are sealed. Only the gatekeeper can read them, once per hypothesis.
+11. Session mode (D19): strategies decide only at the session times in `harness/config.py`.
+    Time-limit exits and order expiries happen at the first session after the limit. Every
+    trial is also run with 6 h and 12 h reaction delay. An edge that disappears with delay needs
+    faster execution than sessions, and that has a price (an always-on host).
 
 ### 6.3 Harness self-tests (canaries)
 
@@ -240,7 +250,7 @@ only if it beats that raw set in the harness.
 - Judgment work uses the top-tier Claude model (the current Opus) through Claude Code
   in headless mode on the lead's subscription:
   `claude -p "<prompt>" --model <pinned full model ID> --output-format json`.
-  The long-lived token for the server comes from `claude setup-token`.
+  Headless runs use the long-lived token from `claude setup-token`.
 - The full model ID and the Claude Code CLI version are pinned in `config/llm.yaml`.
   Changing either counts as a model change (section 8.4).
 - Codex CLI and Gemini CLI: optional second opinions on high-impact events.
@@ -327,18 +337,23 @@ Custody: keep only the margin needed plus a buffer on the exchange. The rest sta
 
 ## 11. Execution
 
+Session mode (D19): the system runs only when the lead starts a session on one of their
+devices. Nothing trades or decides between sessions.
+
 - Venue adapter interface. OKX X-Perps first, Kraken later.
-- Semi-automatic by default. The trade card goes to Telegram: coin, side, entry, stop,
-  target, size, P(win), briefing, evidence links. Approve, or reject with a reason.
-  No answer before the entry expires means no trade.
-- Full-auto toggle per strategy. The dashboard shows whether the graduation criteria are met
-  (at least 50 live trades in which vetoes added nothing). Switching earlier is allowed but
-  is shown as an override.
-- Always on, in both modes: exchange-side stops, risk limits, reconciliation loop (every
-  minute, actual positions vs expected), kill switch.
-- Kill switch triggers: loss limits, stale data (default: a live feed silent for more than
-  5 minutes), repeated API errors, reconciliation mismatch.
-  Action: cancel open entries, keep stops, alert the lead. Only the lead can resume.
+- A session: catch up the data missed since the last session, run the canaries, reconcile
+  actual positions and orders against expected, check the loss limits, close positions whose
+  time limit has passed, then show the trade cards.
+- Semi-automatic. The trade card is shown in the session: coin, side, entry, stop, target,
+  size, P(win), briefing, evidence links. Approve, or reject with a reason.
+- Every entry is sent with its stop and target attached, so the exchange places them together
+  with the entry. Isolated margin. Open positions are protected while no device runs.
+  Limit entries not filled by the next session are cancelled there.
+- Kill switch, checked at every session start and before every order: loss limits, repeated
+  API errors, reconciliation mismatch. Action: cancel open entries, keep stops, tell the lead.
+  Only the lead can resume.
+- Full-auto: deferred. It needs an always-on host and is decided when a strategy qualifies
+  (at least 50 live trades in which vetoes added nothing).
 - Veto log: every human and LLM veto is recorded with a reason. The harness reports whether
   vetoes add or destroy value.
 
@@ -359,9 +374,9 @@ until a backtest looks good.
 - Verifier agent: fresh context, adversarial, ideally from a different vendor (for example Codex).
   Reviews every result that passes the development gate: leak audit, code review for future
   data access, canary reruns, sensitivity checks.
-- Gatekeeper: a deterministic service, not an agent. Runs the holdout once, computes DSR and
+- Gatekeeper: a deterministic command, not an agent. Runs the holdout once, computes DSR and
   PBO with the registry's trial counts, posts the verdict.
-- Ops agent: watches the live system, writes the daily report, triages incidents.
+- Ops agent: runs the session checks, writes the session report, triages incidents.
   It can halt trading. It cannot resume trading or raise limits.
 - Lead (human): approves changes to harness, risk and execution, promotions from the holdout
   step onward, full-auto toggles and limit changes.
@@ -370,7 +385,7 @@ until a backtest looks good.
 
 1. Protected paths: `harness/`, `risk/`, `execution/`, `config/limits.yaml` and the cost model.
    Changes need the lead's review (CODEOWNERS plus branch protection on GitHub).
-2. Sealed holdout: stored on the server outside the repo. Only the gatekeeper can read it.
+2. Sealed holdout: stored outside the repo, not in the development store. Only the gatekeeper can read it.
 3. Automatic trial registry: the harness logs every run itself (spec hash, parameters, data
    range, results). Agents cannot edit or delete entries. One registry for everyone, so the
    trials of every team member count.
@@ -399,20 +414,20 @@ until a backtest looks good.
 
 ## 13. Operations
 
-- Infrastructure: one EU VPS or home server, Docker Compose, Python. Nightly backup of the
-  archives to object storage.
-- Monitoring: a heartbeat per collector and service, alerts to Telegram.
-- Reports: daily ops report, weekly research report.
+- Infrastructure: the lead's own machines, Docker Compose, Python (D19). No server.
+- Backup: Time Machine on the Mac that holds `data/`. Revisit when disk use reaches 50%.
+- Monitoring: the archiver health check (`docker compose ps`) and the session checks.
+- Reports: session report, weekly research report.
 - Tax: per-trade export (time, instrument, side, size, price, fees, funding, PnL in EUR with the
   EUR/USD rate at execution time). Tax treatment to be confirmed with a Steuerberater.
 
 ## 14. Milestones (estimates)
 
-- M0, week 1: repo scaffold, agent rules, day-1 archives running.
+- M0, week 1: repo scaffold, agent rules, day-1 archives running (on the lead's Mac).
 - M1, weeks 1-3: point-in-time store, harness core, cost model v1, trial registry, canaries
   passing. The Fibonacci test is the first registered hypothesis.
 - M2, weeks 4-8: baselines and phase A research, verifier, gatekeeper.
-- M3, from about week 8: risk engine, OKX adapter, Telegram semi-auto flow, kill switch.
+- M3, from about week 8: risk engine, OKX adapter, session tool with semi-auto flow, kill switch.
   Paper trading for anything that passed.
 - M4, in parallel from about week 6: phase B funnel and extraction. Forward evaluation data builds up.
 - M5: small live for strategies that pass paper trading. Phase C decision (X data, Kraken).
@@ -426,4 +441,5 @@ until a backtest looks good.
 - Tax classification of X-Perps (5-year expiry futures) in Germany.
 - X data access for phase C.
 - Kraken EU account when phase C starts.
-- GitHub setup: CODEOWNERS and branch protection for the protected paths.
+- Agents need their own GitHub account, then the ruleset's admin bypass goes (issue #3).
+- Does OKX X-Perps accept stop and target attached to the entry order (`attachAlgoOrds`)? Session mode depends on it.

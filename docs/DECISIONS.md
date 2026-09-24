@@ -139,3 +139,24 @@ If new evidence appears, add a new entry that supersedes the old one. Do not edi
   gatekeeper, lead approval for promotions and limit changes. Agents may halt trading but
   never resume it.
 - Why: automated research without guardrails becomes automated overfitting.
+
+## D19. Session mode: no always-on server
+
+Decided 2026-09-24. Supersedes the server parts of D10, D11 and D17.
+
+- Decision: the system runs only when the lead runs it on their own devices. No VPS, no
+  always-on host. Strategies decide at fixed session times (`harness/config.py`, default
+  07:00 and 19:00 UTC). Backtests use exactly this schedule: time-limit exits and order expiries
+  happen at the first session after the limit. Every entry goes out with its stop and target
+  attached, so open positions are protected at the exchange between sessions. Each session
+  catches up data, reconciles positions and checks the loss limits before any new trade.
+- Archives (D10) run whenever the lead's Mac runs. Gaps are recorded, not prevented.
+- Full-auto (D11) and Telegram alerts (D17) are deferred. Full-auto needs an always-on host.
+- Every trial also runs with 6 h and 12 h reaction delay. An edge that needs faster reaction
+  than sessions shows up there, with its price: an always-on host.
+- Why: trading is semi-automatic, so no trade happens without the lead anyway. Stops and targets
+  sit at the exchange. Holding periods are 4 h to 7 days. A server would mostly add maintenance
+  and a process that can fail unattended. The harness keeps backtests honest about the schedule.
+- Costs: liquidations during gaps are lost (can be bought later), phase B events are traded at
+  the next session, not within minutes.
+- Revisit: when a strategy fails only the delay test, or when full-auto qualifies.
