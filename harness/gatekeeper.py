@@ -38,7 +38,7 @@ def preconditions(hyp, params):
     """The development trial that qualifies this holdout run, or Refused."""
     bad = registry.invalidated()
     entries = registry.entries()
-    if any(e["hypothesis"] == hyp and e["kind"] == "holdout" for e in entries):
+    if any(e["hypothesis"] == hyp and e["kind"] in ("holdout", "holdout_start") for e in entries):  # an aborted run counts too
         raise Refused(f"{hyp} already had its holdout run. There is never a second one.")
     passed = [e for e in entries if e["hypothesis"] == hyp and e["kind"] == "result" and e["params"] == params
               and e.get("verdict") == "pass" and e["trial_id"] not in bad]

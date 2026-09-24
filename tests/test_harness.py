@@ -199,6 +199,6 @@ def test_gatekeeper_preconditions(tmp_path, monkeypatch):
         gatekeeper.preconditions("H-X", params)
     monkeypatch.setattr(gatekeeper, "approvals", lambda: {tid})
     assert gatekeeper.preconditions("H-X", params)["trial_id"] == tid
-    registry.append({"kind": "holdout", "hypothesis": "H-X", "params": params})
+    registry.append({"kind": "holdout_start", "hypothesis": "H-X", "params": params})  # even an aborted run counts
     with pytest.raises(run.Refused, match="never a second"):
         gatekeeper.preconditions("H-X", params)

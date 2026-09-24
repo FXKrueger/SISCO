@@ -28,7 +28,7 @@ def test_sizing_one_r_and_leverage():
     # 1R = 500 USD, stop 5000 USD per BTC -> 0.1 BTC = 1000 contracts of 0.0001
     assert s.contracts == 1000 and s.risk_usd == pytest.approx(500) and s.risk_R == pytest.approx(1)
     # stop 5%: 1/(2*0.05+0.01) = 9.09 -> capped at 5x
-    assert s.leverage == 5 and s.margin == pytest.approx(10_000 / 5)
+    assert s.leverage == 5 and s.margin == pytest.approx(10_000 / 5 + 10)  # plus the opening-fee buffer
     wide, _ = check(btc(stop=80_000, target=140_000), acct(), L)
     assert wide.leverage == 2  # stop 20%: 1/(0.4+0.01) = 2.4 -> 2x, liquidation far beyond the stop
 

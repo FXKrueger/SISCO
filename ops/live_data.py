@@ -9,7 +9,6 @@ import json
 import urllib.request
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from harness.pit import Panel
@@ -74,16 +73,3 @@ def panel(now, top_n, days=120):
 def base_coin(coin):
     """Binance multiplier symbols (1000PEPE) to the plain coin (PEPE) used by X-Perps."""
     return coin.lstrip("0123456789") if coin[:1].isdigit() else coin
-
-
-def beta_to_btc(p, coin, now, days=30):
-    """Beta of hourly returns to BTC over the last `days` days, from data known at now."""
-    def rets(c):
-        d = p.bars[c]
-        d = d[(d.available_time <= now) & (d.available_time > now - pd.Timedelta(days=days))]
-        return np.log(d.set_index("available_time").close).diff()
-
-    if coin == "BTC" or "BTC" not in p.bars:
-        return 1.0
-    x = pd.concat([rets(coin), rets("BTC")], axis=1).dropna()
-    return float(x.cov().iloc[0, 1] / x.iloc[:, 1].var()) if len(x) > 48 else 1.0

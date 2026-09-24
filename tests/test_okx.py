@@ -52,3 +52,19 @@ def test_error_counting(broker, monkeypatch):
         with pytest.raises(okx.OkxError):
             broker.pending()
         assert broker.errors == n
+
+
+def test_successful_reads_do_not_reset_order_errors(broker, monkeypatch):
+    calls = []
+
+    def fake(req, timeout):
+        ok = req.get_method() == "GET"
+        calls.append(ok)
+        return Resp(json.dumps({"code": "0" if ok else "51000", "msg": "", "data": []}).encode())
+
+    monkeypatch.setattr(okx.urllib.request, "urlopen", fake)
+    for _ in range(3):
+        broker.pending()
+        with pytest.raises(okx.OkxError):
+            broker.cancel("BTC-X", "x")
+    assert broker.order_errors == 3 and broker.errors == 1

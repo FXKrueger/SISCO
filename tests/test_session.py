@@ -62,7 +62,7 @@ def env(tmp_path, monkeypatch):
     return SimpleNamespace(journal=j, limits=limits, market=market, path=tmp_path)
 
 
-ARGS = SimpleNamespace(dry_run=False, approve_all=True, resume=False)
+ARGS = SimpleNamespace(dry_run=False, approve_all=True, resume=False, cashflow=None)
 
 
 def test_paper_session_places_once_then_stops_out(env):
@@ -154,3 +154,41 @@ def test_tax_export_uses_last_ecb_rate_and_live_trades_only(tmp_path, monkeypatc
     path, rows = tax.export(2026, j, rates)
     assert len(rows) == 1 and rows[0]["net_pnl_usd"] == 97.0 and rows[0]["ecb_usd_per_eur"] == 1.25
     assert rows[0]["net_pnl_eur"] == round(97 / 1.25, 2) and path.exists()
+
+
+def test_dry_run_does_not_use_up_the_session(env):
+    session.run(SimpleNamespace(dry_run=True, approve_all=False, resume=False, cashflow=None))
+    assert env.journal.trades() == [] and env.journal.get("last_signal_time") is None
+    session.run(ARGS)
+    assert len(env.journal.trades()) == 1
+
+
+def test_paper_ignores_the_candle_that_started_before_the_order(env):
+    session.run(ARGS)
+    t = env.journal.trades()[0]
+    placed = int(pd.Timestamp(t["filled_at"]).timestamp() * 1000)
+    hour = placed - placed % 3_600_000
+    env.market.bars = [(hour, 100_000.0, 100_100.0, t["stop"] - 50, 100_000.0, True)]  # dip before the order
+    session.run(ARGS)
+    assert env.journal.trades()[0]["status"] == "open"
+
+
+def test_loss_limits_use_equity_changes_and_ignore_cash_flows(tmp_path):
+    j = journal_mod.Journal(tmp_path / "j.db")
+    day = pd.Timestamp.now(tz="UTC").floor("D")
+    j.set("equity_log_live", [[(day - pd.Timedelta(hours=5)).isoformat(), 10_000.0], [(day + pd.Timedelta(hours=7)).isoformat(), 9_900.0]])
+    # An old open loss from yesterday is not today's loss: today = equity now vs the last snapshot before midnight.
+    assert session.pnl_R(j, "live", 9_850.0, 50.0, day) == pytest.approx(-3.0)
+    j.set("peak_live", 10_000.0)
+    j.cashflow("live", -2_000.0, "withdrawal")
+    assert session.pnl_R(j, "live", 7_850.0, 50.0, day) == pytest.approx(-3.0)  # the withdrawal is not a loss
+    assert j.get("peak_live") == 8_000.0
+
+
+def test_reconcile_exit_reason_with_market_fill_slippage(tmp_path):
+    j = journal_mod.Journal(tmp_path / "j.db")
+    add(j, filled_at="2026-01-01T00:00:00+00:00")
+    closed = [{"instId": "I", "closed_ms": int(pd.Timestamp("2026-01-01T12:00:00Z").timestamp() * 1000), "pnl": 149.0, "fee": 1.0,
+               "funding": 0.0, "close_px": 114.9}]  # target 115, filled just below
+    session.reconcile(FakeBroker(closed=closed), j)
+    assert j.trades()[0]["exit_reason"] == "target"

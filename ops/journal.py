@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS trades (
   id TEXT PRIMARY KEY,           -- clOrdId
   mode TEXT, strategy TEXT, params TEXT, coin TEXT, inst_id TEXT, side TEXT, kind TEXT,
   planned_entry REAL, entry_px REAL, stop REAL, target REAL, contracts REAL, ct_val REAL,
-  one_r_usd REAL, risk_usd REAL, leverage INTEGER, time_limit_h REAL,
+  one_r_usd REAL, risk_usd REAL, leverage INTEGER, time_limit_h REAL, expiry_h REAL,
   signal_time TEXT, placed_at TEXT, filled_at TEXT, closed_at TEXT, checked_to_ms INTEGER,
   exit_px REAL, exit_reason TEXT, pnl_usd REAL, fee_usd REAL, funding_usd REAL,
   status TEXT                    -- pending | open | closed | cancelled
@@ -66,6 +66,29 @@ class Journal:
     def log_session(self, mode, report):
         with self.db:
             self.db.execute("INSERT INTO sessions VALUES (?, ?, ?)", (now(), mode, report))
+
+    # --- equity history: loss limits and drawdown measure equity changes, cash flows excluded ---
+    def snapshot(self, mode, equity):
+        log = self.get(f"equity_log_{mode}", [])
+        log.append([now(), equity])
+        self.set(f"equity_log_{mode}", log[-2000:])
+
+    def cashflow(self, mode, amount, note=""):
+        """A deposit (+) or withdrawal (-). Moves the peak with it, so it is not counted as P&L."""
+        self.set(f"cashflows_{mode}", self.get(f"cashflows_{mode}", []) + [[now(), amount, note]])
+        if self.get(f"peak_{mode}") is not None:
+            self.set(f"peak_{mode}", self.get(f"peak_{mode}") + amount)
+
+    def equity_change(self, mode, equity_now, since):
+        """Trading P&L (USD) since `since`: equity now minus equity at the last snapshot at or before
+        `since`, minus cash flows after that snapshot. No snapshot that old: from the oldest one."""
+        log = self.get(f"equity_log_{mode}", [])
+        if not log:
+            return 0.0
+        before = [e for e in log if e[0] <= since.isoformat()]
+        ref_t, ref_eq = before[-1] if before else log[0]
+        cash = sum(a for t, a, _ in self.get(f"cashflows_{mode}", []) if t > ref_t)
+        return equity_now - ref_eq - cash
 
     def r_multiple(self, t):
         """Realized result of a closed trade in R (1R at the time of the trade)."""

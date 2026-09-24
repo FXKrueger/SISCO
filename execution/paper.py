@@ -132,8 +132,9 @@ def _iso(ms):
 
 
 def _bars_since(inst_id, since_ms):
-    """Confirmed 1h candles starting at or after the hour containing since_ms, oldest first."""
-    start = since_ms - since_ms % 3_600_000
+    """Confirmed 1h candles that start at or after since_ms, oldest first. The candle that was
+    already running when the order was placed is skipped: its high and low may predate the order."""
+    start = since_ms if since_ms % 3_600_000 == 0 else since_ms - since_ms % 3_600_000 + 3_600_000
     out, after = [], None
     for _ in range(10):
         rows = okx.candles(inst_id, after_ms=after, limit=100)

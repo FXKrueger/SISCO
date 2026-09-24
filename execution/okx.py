@@ -15,7 +15,6 @@ import hashlib
 import hmac
 import json
 import os
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,7 +41,8 @@ def xperp_instruments():
     """coin -> instrument spec for every live X-Perp."""
     out = {}
     for i in _get_public("/api/v5/public/instruments", {"instType": "FUTURES"}):
-        if i.get("ruleType") == "xperp" and i["state"] == "live":
+        # USD-settled X-Perps only; never let a second contract for the same coin replace the first.
+        if i.get("ruleType") == "xperp" and i["state"] == "live" and i.get("settleCcy") == "USD" and i["instFamily"].split("-")[0] not in out:
             out[i["instFamily"].split("-")[0]] = {
                 "instId": i["instId"], "ct_val": float(i["ctVal"]) * float(i.get("ctMult") or 1),
                 "lot_sz": float(i["lotSz"]), "min_sz": float(i["minSz"]), "tick_sz": float(i["tickSz"]),
@@ -87,7 +87,8 @@ class OkxBroker:
         self.key = key or os.environ["SISCO_OKX_KEY"]
         self.secret = secret or os.environ["SISCO_OKX_SECRET"]
         self.passphrase = passphrase or os.environ["SISCO_OKX_PASSPHRASE"]
-        self.errors = 0  # consecutive API errors, for the kill switch
+        self.errors = 0  # consecutive failed requests of any kind (reset by any success)
+        self.order_errors = 0  # consecutive failed order requests (reset only by a successful order request)
         self.instruments = xperp_instruments()
 
     @property
@@ -108,14 +109,21 @@ class OkxBroker:
             with urllib.request.urlopen(req, timeout=20) as r:
                 out = json.loads(r.read())
         except (urllib.error.URLError, TimeoutError) as e:
-            self.errors += 1
+            self._fail(method)
             raise OkxError(f"{method} {path}: {e!r}") from e
         if out.get("code") != "0":
-            self.errors += 1
+            self._fail(method)
             detail = [(d.get("sCode"), d.get("sMsg")) for d in out.get("data", []) if isinstance(d, dict)]
             raise OkxError(f"{method} {path}: {out.get('code')} {out.get('msg')} {detail}")
         self.errors = 0
+        if method == "POST":
+            self.order_errors = 0  # a successful read must not hide failing orders
         return out["data"]
+
+    def _fail(self, method):
+        self.errors += 1
+        if method == "POST":
+            self.order_errors += 1
 
     # --- account setup (idempotent, run by the session before trading) ---
     def setup(self):
@@ -126,8 +134,10 @@ class OkxBroker:
     # --- state ---
     def account(self):
         d = self._req("GET", "/api/v5/account/balance")[0]
-        avail = sum(float(c.get("availEq") or c.get("availBal") or 0) for c in d.get("details", []))
-        return {"equity": float(d["totalEq"]), "available": avail}
+        # X-Perps settle in USD. Only the USD balance is margin for them; other currencies are
+        # not summed in (their units differ). No USD balance: nothing available, orders refused.
+        usd = next((c for c in d.get("details", []) if c.get("ccy") == "USD"), {})
+        return {"equity": float(d["totalEq"]), "available": float(usd.get("availBal") or usd.get("availEq") or 0)}
 
     def positions(self):
         out = []
@@ -144,7 +154,7 @@ class OkxBroker:
 
     def closed_positions(self, since_ms):
         """Realized PnL per closed position, fees and funding included (USD)."""
-        rows = self._req("GET", "/api/v5/account/positions-history", {"instType": "FUTURES", "after": str(int(time.time() * 1000))})
+        rows = self._req("GET", "/api/v5/account/positions-history", {"instType": "FUTURES"})  # latest 100
         # OKX: pnl is the price PnL, fee is negative when charged, fundingFee is signed (received > 0).
         return [{"instId": r["instId"], "closed_ms": int(r["uTime"]), "pnl": float(r.get("pnl") or 0),
                  "fee": -float(r.get("fee") or 0), "funding": float(r.get("fundingFee") or 0), "close_px": float(r["closeAvgPx"])}
@@ -155,7 +165,7 @@ class OkxBroker:
         spec = next(v for v in self.instruments.values() if v["instId"] == inst_id)
         self._req("POST", "/api/v5/account/set-leverage", body={"instId": inst_id, "lever": str(leverage), "mgnMode": "isolated"})
         body = {"instId": inst_id, "tdMode": "isolated", "side": "buy" if side == "long" else "sell", "clOrdId": cl_ord_id,
-                "ordType": "limit" if kind == "limit" else "market", "sz": str(int(contracts)) if contracts == int(contracts) else str(contracts),
+                "ordType": "limit" if kind == "limit" else "market", "sz": round_px(contracts, spec["lot_sz"]),
                 "attachAlgoOrds": [{"attachAlgoClOrdId": cl_ord_id + "a", "slTriggerPx": round_px(stop, spec["tick_sz"]), "slOrdPx": "-1",
                                     "tpTriggerPx": round_px(target, spec["tick_sz"]), "tpOrdPx": "-1",
                                     "slTriggerPxType": "last", "tpTriggerPxType": "last"}]}
@@ -169,11 +179,14 @@ class OkxBroker:
     def close(self, inst_id):
         """Market-close a position and cancel its attached stop and target."""
         self._req("POST", "/api/v5/trade/close-position", body={"instId": inst_id, "mgnMode": "isolated", "autoCxl": True})
-        for kind in ("oco", "conditional"):
+        for kind in ("oco", "conditional"):  # autoCxl should have removed them; make sure, and tolerate "not found"
             algos = [a for a in self._req("GET", "/api/v5/trade/orders-algo-pending", {"instType": "FUTURES", "ordType": kind})
                      if a["instId"] == inst_id]
             if algos:
-                self._req("POST", "/api/v5/trade/cancel-algos", body=[{"algoId": a["algoId"], "instId": inst_id} for a in algos])
+                try:
+                    self._req("POST", "/api/v5/trade/cancel-algos", body=[{"algoId": a["algoId"], "instId": inst_id} for a in algos])
+                except OkxError:
+                    self.order_errors = max(0, self.order_errors - 1)
 
     def protected(self, inst_id):
         """True if a stop (algo order) is live for this instrument."""

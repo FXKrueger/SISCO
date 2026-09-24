@@ -3,6 +3,7 @@
   python -m ops.session              run a session
   python -m ops.session --dry-run    everything except placing orders
   python -m ops.session --resume     clear a kill-switch halt (the lead only, CLAUDE.md rule 7)
+  python -m ops.session --cashflow -2000 "withdrawal"   record a deposit (+) or withdrawal (-) in USD
 
 Order of steps: lock, clock check, reconciliation, loss limits and kill switch, housekeeping
 (time exits, stale entries), fresh data, signals from approved strategies only, risk check,
@@ -24,7 +25,7 @@ from execution import okx
 from execution.paper import PaperBroker
 from harness import canaries
 from harness.config import SESSIONS_UTC
-from harness.engine import next_session
+from harness.engine import beta, next_session
 from harness.run import Refused, check_registered, lint, load_strategy, strategy_files
 from risk.engine import Account, Position, Proposal, check, halt_reason, load_limits
 
@@ -59,14 +60,13 @@ def stage_mult(journal, strategy, stage):
     """SPEC 6.4: paper and live at full size; live_small at 0.25R for 30 trades, then 0.5R."""
     if stage != "live_small":
         return 1.0
-    n = len(journal.trades("strategy = ? AND mode != 'paper' AND status = 'closed'", (strategy,)))
+    n = len(journal.trades("strategy = ? AND mode = 'live' AND status = 'closed'", (strategy,)))  # real money only
     return 0.25 if n < 30 else 0.5
 
 
-def pnl_R(journal, mode, broker, one_r_usd, since):
-    closed = sum(journal.r_multiple(t) * t["one_r_usd"] for t in journal.trades("mode = ? AND status = 'closed' AND closed_at >= ?", (mode, since.isoformat())))
-    upl = sum(p["upl"] for p in broker.positions())
-    return (closed + upl) / one_r_usd if one_r_usd else 0.0
+def pnl_R(journal, mode, equity, one_r_usd, since):
+    """Trading P&L since `since` in R, realized and open, from equity snapshots (cash flows excluded)."""
+    return journal.equity_change(mode, equity, since) / one_r_usd if one_r_usd else 0.0
 
 
 def reconcile(broker, journal):
@@ -92,7 +92,10 @@ def reconcile(broker, journal):
         if closed:
             c = closed[0]
             s = 1 if t["side"] == "long" else -1
-            reason = "target" if s * (c["close_px"] - t["target"]) >= 0 else ("stop" if s * (c["close_px"] - t["stop"]) <= 0 else "other")
+            # Stop and target fill as market orders, so the fill is near, not at, the trigger price.
+            reason = "target" if abs(c["close_px"] - t["target"]) < abs(c["close_px"] - t["stop"]) else "stop"
+            if c["closed_ms"] >= next_session(pd.Timestamp(t["filled_at"] or t["placed_at"]) + pd.Timedelta(hours=t["time_limit_h"]), SESSIONS_UTC).timestamp() * 1000:
+                reason = "time"
             journal.update(t["id"], status="closed", exit_px=c["close_px"], exit_reason=reason, pnl_usd=c["pnl"], fee_usd=c["fee"],
                            funding_usd=c["funding"], closed_at=datetime.fromtimestamp(c["closed_ms"] / 1000, timezone.utc).isoformat(timespec="seconds"),
                            entry_px=t["entry_px"] or t["planned_entry"])
@@ -140,7 +143,13 @@ def run(args):
         sys.exit(f"another session is running (or crashed): remove {lock} if you are sure it is not")
     try:
         os.close(fd)
+        if args.cashflow is not None:
+            journal.cashflow(mode, args.cashflow[0], args.cashflow[1] if len(args.cashflow) > 1 else "")
+            print(f"recorded cash flow {args.cashflow[0]:+.2f} USD ({mode})")
+            return
         if args.resume:
+            if not sys.stdin.isatty():
+                sys.exit("--resume must be typed by the lead in a terminal (CLAUDE.md rule 7)")
             h = journal.get("halted")
             if not h:
                 print("not halted")
@@ -175,13 +184,14 @@ def run(args):
         journal.set(f"peak_{live_broker.mode}", peak)
         one_r = acc["equity"] * limits["risk_per_trade_pct"] / 100
         account = Account(acc["equity"], peak, acc["available"],
-                          pnl_today_R=pnl_R(journal, live_broker.mode, live_broker, one_r, t_now.floor("D")),
-                          pnl_7d_R=pnl_R(journal, live_broker.mode, live_broker, one_r, t_now - pd.Timedelta(days=7)),
+                          pnl_today_R=pnl_R(journal, live_broker.mode, acc["equity"], one_r, t_now.floor("D")),
+                          pnl_7d_R=pnl_R(journal, live_broker.mode, acc["equity"], one_r, t_now - pd.Timedelta(days=7)),
                           halted=journal.get("halted"))
+        journal.snapshot(live_broker.mode, acc["equity"])
         report.append(f"Equity {acc['equity']:.2f} USD (peak {peak:.2f}), 1R = {one_r:.2f} USD, "
                       f"today {account.pnl_today_R:+.2f}R, 7 days {account.pnl_7d_R:+.2f}R\n")
-        if live_broker.errors >= limits["max_consecutive_api_errors"]:
-            problems.append(f"{live_broker.errors} consecutive API errors")
+        if max(getattr(live_broker, "errors", 0), getattr(live_broker, "order_errors", 0)) >= limits["max_consecutive_api_errors"]:
+            problems.append("repeated API errors")
         reason = "; ".join(problems) if problems else halt_reason(account, limits)
         if reason and not journal.get("halted"):
             halt(journal, brokers, reason, report)
@@ -191,13 +201,18 @@ def run(args):
         #    entries that were valid until this session.
         for t in journal.trades("status IN ('pending', 'open')"):
             b = brokers["paper"] if t["mode"] == "paper" else live_broker
-            if t["status"] == "pending" and pd.Timestamp(t["placed_at"]) < session_time(t_now):
-                b.cancel(t["inst_id"], t["id"])
-                journal.update(t["id"], status="cancelled", closed_at=now())
-                report.append(f"- cancelled unfilled entry {t['coin']} ({t['strategy']})")
-            elif t["status"] == "open" and next_session(pd.Timestamp(t["filled_at"]) + pd.Timedelta(hours=t["time_limit_h"]), SESSIONS_UTC) <= t_now:
-                b.close(t["inst_id"])
-                report.append(f"- closed {t['coin']} ({t['strategy']}) at its time limit")
+            try:
+                # Same rule as the backtest: an entry expires at the first session after signal time + expiry.
+                expires = next_session(pd.Timestamp(t["signal_time"]) + pd.Timedelta(hours=t["expiry_h"] or 0), SESSIONS_UTC)
+                if t["status"] == "pending" and expires <= t_now:
+                    b.cancel(t["inst_id"], t["id"])
+                    journal.update(t["id"], status="cancelled", closed_at=now())
+                    report.append(f"- cancelled unfilled entry {t['coin']} ({t['strategy']})")
+                elif t["status"] == "open" and next_session(pd.Timestamp(t["filled_at"]) + pd.Timedelta(hours=t["time_limit_h"]), SESSIONS_UTC) <= t_now:
+                    b.close(t["inst_id"])
+                    report.append(f"- closed {t['coin']} ({t['strategy']}) at its time limit")
+            except okx.OkxError as e:
+                report.append(f"- HOUSEKEEPING FAILED for {t['coin']} ({t['strategy']}): {e}")
         if mode in ("demo", "live"):
             reconcile(live_broker, journal)
         brokers["paper"].sync()
@@ -236,7 +251,10 @@ def run(args):
                 b = brokers["paper"] if strat["stage"] == "paper" else live_broker
                 for sig in signals:
                     _handle(sig, strat, b, sub, journal, limits, args, report, t_sess)
-            journal.set("last_signal_time", t_sess.isoformat())
+            if not args.dry_run:  # a dry run must not use up the session
+                journal.set("last_signal_time", t_sess.isoformat())
+            if getattr(live_broker, "order_errors", 0) >= limits["max_consecutive_api_errors"] and not journal.get("halted"):
+                halt(journal, brokers, "repeated order errors", report)
             if mode in ("demo", "live"):
                 time.sleep(2)
                 reconcile(live_broker, journal)  # record market fills now, so time limits start at the fill
@@ -302,26 +320,26 @@ def _handle(sig, strat, broker, panel, journal, limits, args, report, t_sess):
     open_trades = journal.trades("mode = ? AND status IN ('pending', 'open')", (mode,))
     acc = broker.account()
     one_r = acc["equity"] * limits["risk_per_trade_pct"] / 100
-    beta = live_data.beta_to_btc(panel, sig.coin, t_sess)
+    b_now = beta(panel, sig.coin, t_sess)  # the backtest's function: same numbers live and in research
     by_base = {live_data.base_coin(c): c for c in panel.bars}
     positions = [Position(t["coin"], t["side"], t["risk_usd"] / one_r,
-                          live_data.beta_to_btc(panel, by_base[t["coin"]], t_sess) if t["coin"] in by_base else 1.0) for t in open_trades]
+                          beta(panel, by_base[t["coin"]], t_sess) if t["coin"] in by_base else 1.0) for t in open_trades]
     positions += args.__dict__.setdefault("dry_positions", [])  # a dry run counts its cards like real orders
     peak = journal.get(f"peak_{mode}", acc["equity"])
     account = Account(acc["equity"], max(peak, acc["equity"]), acc["available"], positions,
-                      pnl_R(journal, mode, broker, one_r, pd.Timestamp.now(tz="UTC").floor("D")),
-                      pnl_R(journal, mode, broker, one_r, pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7)), journal.get("halted"))
-    prop = Proposal(coin, sig.side, entry, stop, target, stage_mult(journal, strat["id"], strat["stage"]), beta,
+                      pnl_R(journal, mode, acc["equity"], one_r, pd.Timestamp.now(tz="UTC").floor("D")),
+                      pnl_R(journal, mode, acc["equity"], one_r, pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7)), journal.get("halted"))
+    prop = Proposal(coin, sig.side, entry, stop, target, stage_mult(journal, strat["id"], strat["stage"]), b_now,
                     inst["ct_val"], inst["lot_sz"], inst["min_sz"])
     sized, why = check(prop, account, limits)
     if why:
         journal.veto(strat["id"], coin, sig.side, "risk", why)
         report.append(f"- {strat['id']} {sig.side} {coin}: refused by risk engine: {why}")
         return
-    text = card(sig, strat, inst, prop, sized, mode, beta)
+    text = card(sig, strat, inst, prop, sized, mode, b_now)
     print("\n" + text)
     if args.dry_run:
-        args.dry_positions.append(Position(coin, sig.side, sized.risk_R, beta))
+        args.dry_positions.append(Position(coin, sig.side, sized.risk_R, b_now))
         report.append(f"- dry run, not placed:\n```\n{text}\n```")
         return
     answer = "y" if (args.approve_all and mode == "paper") else input("Approve? [y/N] ").strip().lower()
@@ -331,10 +349,14 @@ def _handle(sig, strat, broker, panel, journal, limits, args, report, t_sess):
         report.append(f"- rejected by the lead: {strat['id']} {sig.side} {coin} ({why})")
         return
     cl = "s" + hashlib.sha1(f"{strat['id']}{coin}{t_sess}".encode()).hexdigest()[:20]
+    if journal.trades("id = ?", (cl,)):  # a rerun after a crash: this signal was already handled
+        report.append(f"- {strat['id']} {sig.side} {coin}: already handled in this session")
+        return
     journal.add_trade(id=cl, mode=mode, strategy=strat["id"], params=json.dumps(strat["params"]), coin=coin, inst_id=inst["instId"],
                       side=sig.side, kind=sig.entry.kind, planned_entry=entry, stop=stop, target=target, contracts=sized.contracts,
                       ct_val=inst["ct_val"], one_r_usd=one_r, risk_usd=sized.risk_usd, leverage=sized.leverage,
-                      time_limit_h=sig.time_limit / pd.Timedelta(hours=1), signal_time=t_sess.isoformat(), placed_at=now(), status="pending")
+                      time_limit_h=sig.time_limit / pd.Timedelta(hours=1), expiry_h=sig.entry.expiry / pd.Timedelta(hours=1),
+                      signal_time=t_sess.isoformat(), placed_at=now(), status="pending")
     try:
         broker.place_entry(inst["instId"], sig.side, sized.contracts, sig.entry.kind, entry, stop, target, sized.leverage, cl)
         report.append(f"- placed: {strat['id']} {sig.side} {coin}, {sized.risk_R:.2f}R")
@@ -348,4 +370,8 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--approve-all", action="store_true", help="paper mode only: approve every card")
     ap.add_argument("--resume", action="store_true")
-    run(ap.parse_args())
+    ap.add_argument("--cashflow", nargs="+", type=str, metavar=("USD", "NOTE"))
+    a = ap.parse_args()
+    if a.cashflow:
+        a.cashflow = [float(a.cashflow[0]), " ".join(a.cashflow[1:])]
+    run(a)

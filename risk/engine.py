@@ -116,7 +116,7 @@ def check(p, acct, limits):
     if lev < 1:
         return None, "stop too wide for a safe liquidation distance"
     notional = contracts * p.ct_val * p.entry
-    margin = notional / lev
+    margin = notional / lev + notional * 0.001  # initial margin plus a buffer for the opening fee
     if margin > acct.available:
         return None, f"not enough free margin ({margin:.0f} needed, {acct.available:.0f} free)"
     return Sized(contracts, lev, risk_usd, risk_R, notional, margin), None
