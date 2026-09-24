@@ -127,6 +127,15 @@ def gates(r):
     return g, verdict
 
 
+def final(hypothesis):
+    """DSR and PBO for every valid trial of a hypothesis, deflated by all of its trials so far.
+    A trial's own report shows DSR at the time it ran, with fewer trials: an early trial looks
+    better than it is. Verdicts and the gatekeeper use these numbers."""
+    m = registry.series(hypothesis)
+    srs = [x.mean() / x.std(ddof=1) for _, x in m.items() if x.std(ddof=1) > 0]
+    return {tid: stats.deflated_sharpe(m[tid].to_numpy(), srs) for tid in m.columns}, stats.pbo(m.to_numpy())
+
+
 def fmt(x, nd=2):
     return "n/a" if x is None else (f"{x:.{nd}f}" if isinstance(x, float) else str(x))
 
@@ -158,7 +167,7 @@ def report(folder, spec, trial_id, params, r, g, verdict):
 | Net R | {r['net_R_1x']:.1f} | {r['net_R_2x']:.1f} |
 | Net Sharpe (daily, annualized) | {r['sharpe_1x']:.2f} | {r['sharpe_2x']:.2f} |
 
-- DSR: {fmt(r['dsr'])} (trials in hypothesis: {r['trials_in_hypothesis']})
+- DSR: {fmt(r['dsr'])} (with the {r['trials_in_hypothesis']} trials so far; later trials lower it, harness.run.final is binding)
 - PBO: {fmt(r['pbo'])}
 - Max drawdown: {r['max_dd_R_2x']:.1f} R
 - Trades: {r['trades']}, win rate {fmt(r['win_rate'])}

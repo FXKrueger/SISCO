@@ -194,10 +194,15 @@ def test_gatekeeper_preconditions(tmp_path, monkeypatch):
     with pytest.raises(run.Refused, match="passed stage 3"):
         gatekeeper.preconditions("H-X", params)
     tid = registry.append({"kind": "result", "hypothesis": "H-X", "params": params, "verdict": "pass"})
+    monkeypatch.setattr(gatekeeper, "final", lambda h: ({tid: 0.97}, 0.1))
     monkeypatch.setattr(gatekeeper, "approvals", lambda: set())
     with pytest.raises(run.Refused, match="not approved"):
         gatekeeper.preconditions("H-X", params)
     monkeypatch.setattr(gatekeeper, "approvals", lambda: {tid})
+    monkeypatch.setattr(gatekeeper, "final", lambda h: ({tid: 0.5}, 0.1))
+    with pytest.raises(run.Refused, match="deflated by all trials"):
+        gatekeeper.preconditions("H-X", params)  # an early "pass" that later trials deflate below the gate
+    monkeypatch.setattr(gatekeeper, "final", lambda h: ({tid: 0.97}, 0.1))
     assert gatekeeper.preconditions("H-X", params)["trial_id"] == tid
     registry.append({"kind": "holdout_start", "hypothesis": "H-X", "params": params})  # even an aborted run counts
     with pytest.raises(run.Refused, match="never a second"):
